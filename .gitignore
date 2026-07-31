@@ -52,6 +52,9 @@ ios/Podfile.lock
 
 .metadata
 
+# Optional local-only configuration
+/.local/
+
 # Local Codex session data
 /.codex/
 

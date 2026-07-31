@@ -89,12 +89,6 @@
 - 最终产物：`dist/android/TUIKit-OfflineDemo-P1-0.2.0+3.apk`，98,438,591 字节，SHA-256 `C513654A6DC3CF512154E47E02BDF66EBC40C20ABEA91B6D9FD72606EED01139`。
 - Git `origin` 已切换为 `https://github.com/zl3388/TUIKit_Flutter.git`，并验证 fork 的 `main` 分支可访问。
 
-### 网络环境验证
-
-- 执行环境曾注入 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`GIT_HTTP_PROXY`、`GIT_HTTPS_PROXY=http://127.0.0.1:9`，GitHub 请求失败并表现为命令长时间等待。
-- 同一 GitHub Git 服务端点对比：错误代理返回 HTTP 000；直连返回 HTTP 200（4.71 秒）；`127.0.0.1:7890` 返回 HTTP 200（1.49 秒）。
-- 当前仓库已设置 Git 本地 `http.proxy`/`https.proxy=http://127.0.0.1:7890`；Flutter/Pub 联网命令仍需在进程环境显式覆盖注入代理。
-
 ### 风险变化
 
 - 在线 UIKit 源码仍保留作参考，但已不在 `application` 的离线依赖图中；若未来恢复在线 flavor，必须使用独立依赖配置。

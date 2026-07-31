@@ -36,24 +36,28 @@ $env:ANDROID_SDK_ROOT='D:\Programs\Android\SDK'
 $env:JAVA_HOME='D:\Programs\Android\Android Studio\jbr'
 ```
 
-## 网络代理诊断
+## 可选本地网络配置
 
-当前执行环境会注入指向 `127.0.0.1:9` 的无效 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 Git 代理变量，未覆盖时 Git/Flutter 命令会等待连接失败。2026-07-31 对同一 GitHub Git 端点的命令对比为：错误代理 HTTP 000，直连 HTTP 200（4.71 秒），`127.0.0.1:7890` HTTP 200（1.49 秒）。
+仓库不设置 HTTP、Git 或 Flutter/Pub 代理。需要代理的开发机可使用被 Git 忽略的 `.local/network.ps1`；没有该文件时构建命令不会主动修改网络环境。
 
-当前仓库已配置本地 Git 代理。运行 Flutter/Pub 前仍应显式覆盖进程环境：
+本地配置格式：
 
 ```powershell
-$proxy='http://127.0.0.1:7890'
+$proxy='http://<proxy-host>:<proxy-port>'
 $env:HTTP_PROXY=$proxy
 $env:HTTPS_PROXY=$proxy
 $env:ALL_PROXY=$proxy
 $env:GIT_HTTP_PROXY=$proxy
 $env:GIT_HTTPS_PROXY=$proxy
 ```
+
+不要使用 `git config --global` 或提交真实代理地址。代理只在显式加载该本地文件的 PowerShell 进程及其子进程中生效。
+
 ## 构建命令
 
 ```powershell
 cd application
+if (Test-Path ..\.local\network.ps1) { . ..\.local\network.ps1 }
 flutter --no-version-check pub get
 flutter --no-version-check build apk --release --no-pub --build-name 0.2.0 --build-number 3
 ```
