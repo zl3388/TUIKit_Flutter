@@ -46,18 +46,10 @@ dependencies:
   path_provider: ^2.0.15
   path_provider_android: '<=2.2.15'
   url_launcher_android: '<=6.3.14'
-  tencent_live_uikit:
-    path: ../live/livekit
-  tencent_conference_uikit: 
-    path: ../room
-  tencent_calls_uikit:
-    path: ../call
-  tencent_chat_uikit:
-    path: ../chat/uikit
-
-# Temporary solution, to be removed after the release of chat/live
-dependency_overrides:
-  atomic_x_core: ^5.0.2
+  sqflite: ^2.4.3
+  path: ^1.9.1
+  file_picker: 10.3.10
+  image: ^4.9.1
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +61,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+  sqflite_common_ffi: ^2.4.2
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

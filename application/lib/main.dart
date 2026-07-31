@@ -1,96 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import 'package:tencent_calls_uikit/tencent_calls_uikit.dart';
-import 'package:tencent_live_uikit/tencent_live_uikit.dart';
-import 'package:tencent_conference_uikit/tencent_conference_uikit.dart';
-import 'package:tencent_chat_uikit/tencent_chat_uikit.dart';
-// import 'package:te_beauty_kit/te_beauty_kit.dart';
 
-import 'src/login/index.dart';
-import 'src/utils/index.dart';
+import 'src/offline_demo/offline_demo_app.dart';
 
-void main() {
-  runApp(const MyApp());
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(statusBarColor: Colors.transparent));
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
-}
-
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
-
-  @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  late final ThemeState _themeState;
-
-  @override
-  void initState() {
-    super.initState();
-    _themeState = ThemeState();
-    _initializeApp();
-  }
-
-  Future<void> _initializeApp() async {
-    await AppBuilder.init(path: 'assets/appConfig.json');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider.value(value: LocaleProvider()),
-      ],
-      child: Builder(builder: (context) {
-        return ComponentTheme(
-          themeState: _themeState,
-          child: MaterialApp(
-            debugShowCheckedModeBanner: false,
-            navigatorObservers: [
-              AppNavigatorObserver.instance,
-              TUILiveKitNavigatorObserver.instance,
-              RoomNavigatorObserver.instance,
-              TUICallKit.navigatorObserver
-            ],
-            localizationsDelegates: const [
-              ...AppLocalizations.localizationsDelegates,
-              ...LiveKitLocalizations.localizationsDelegates,
-              ...BarrageLocalizations.localizationsDelegates,
-              ...GiftLocalizations.localizationsDelegates,
-              ...RoomLocalizations.localizationsDelegates,
-              // ...TEBeautyKitLocalizations.localizationsDelegates,
-              AtomicLocalizations.delegate,
-              ChatLocalizations.delegate,
-            ],
-            supportedLocales: const [
-              Locale('en'),
-              Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
-              Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
-              Locale('zh'),
-            ],
-            locale: Provider.of<LocaleProvider>(context).locale,
-            builder: (context, child) => Scaffold(
-              resizeToAvoidBottomInset: false,
-              body: GestureDetector(
-                onTap: () {
-                  hideKeyboard(context);
-                },
-                child: child,
-              ),
-            ),
-            home: const LoginWidget(),
-          ),
-        );
-      }),
-    );
-  }
-
-  void hideKeyboard(BuildContext context) {
-    FocusScopeNode currentFocus = FocusScope.of(context);
-    if (!currentFocus.hasPrimaryFocus && currentFocus.focusedChild != null) {
-      FocusManager.instance.primaryFocus?.unfocus();
-    }
-  }
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+    ),
+  );
+  runApp(const OfflineDemoApp());
 }

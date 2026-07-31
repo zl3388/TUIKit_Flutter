@@ -47,6 +47,15 @@ app.*.map.json
 
 *.cxx/
 pubspec.lock
+!/application/pubspec.lock
 ios/Podfile.lock
 
 .metadata
+
+# Local Codex session data
+/.codex/
+
+# Local Android release artifacts
+/dist/android/*.apk
+/dist/android/*.aab
+/dist/android/*.sha256

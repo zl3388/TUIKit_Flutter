@@ -16,3 +16,27 @@ subprojects {
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
+// Compile every local and hosted Android library against the API used by the app.
+// Several resolved AndroidX/Compose artifacts require API 35 or newer.
+subprojects { subproject ->
+    subproject.plugins.withId("com.android.library") {
+        subproject.extensions.getByName("androidComponents").finalizeDsl { androidDsl ->
+            androidDsl.compileSdk = 36
+        }
+    }
+}
+// Legacy Tencent plugins declare different Java targets. Keep each Kotlin task
+// aligned with its Android module to satisfy Kotlin 2.3 target validation.
+gradle.projectsEvaluated {
+    rootProject.subprojects { subproject ->
+        def androidExtension = subproject.extensions.findByName("android")
+        if (androidExtension != null && subproject.plugins.hasPlugin("org.jetbrains.kotlin.android")) {
+            def javaTarget = androidExtension.compileOptions.targetCompatibility.toString()
+            subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                kotlinOptions {
+                    jvmTarget = javaTarget
+                }
+            }
+        }
+    }
+}

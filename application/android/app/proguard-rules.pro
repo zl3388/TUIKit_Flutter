@@ -6,6 +6,12 @@
 -dontwarn com.tencent.xmagic.XmagicApi
 -dontwarn com.tommy.rtmp.**
 
+# Room 2.5 creates generated database implementations through Class.newInstance().
+# AGP 9/R8 can otherwise remove their no-argument constructors.
+-keep class * extends androidx.room.RoomDatabase {
+    <init>();
+}
+
 # TencentEffect
 -keep class com.tencent.xmagic.** { *;}
 -keep class org.light.** { *;}
