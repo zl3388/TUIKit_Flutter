@@ -55,6 +55,25 @@ class OfflineDemoStore extends ChangeNotifier {
     return repositories.conversations.listMessages(conversationId);
   }
 
+  Future<OfflineMessage> sendTextMessage({
+    required String conversationId,
+    required String text,
+  }) async {
+    final currentProfile = profile;
+    if (currentProfile == null) {
+      throw StateError('The offline profile is not loaded.');
+    }
+
+    final message = await repositories.conversations.sendTextMessage(
+      conversationId: conversationId,
+      senderProfileId: currentProfile.id,
+      text: text,
+    );
+    conversations = await repositories.conversations.listConversations();
+    notifyListeners();
+    return message;
+  }
+
   Future<void> markNotificationRead(String notificationId) async {
     await repositories.activity.markNotificationRead(notificationId);
     notifications = await repositories.activity.listNotifications();

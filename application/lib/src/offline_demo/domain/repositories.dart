@@ -17,6 +17,13 @@ abstract interface class ConversationRepository {
   Future<List<OfflineMessage>> listMessages(String conversationId);
 
   Future<List<OfflineAttachment>> listAttachments(String messageId);
+
+  Future<OfflineMessage> sendTextMessage({
+    required String conversationId,
+    required String senderProfileId,
+    required String text,
+    DateTime? sentAt,
+  });
 }
 
 abstract interface class ActivityRepository {
@@ -96,9 +103,10 @@ ORDER BY c.is_favorite DESC, ou.sort_order ASC, p.display_name COLLATE NOCASE AS
 }
 
 class SqliteConversationRepository implements ConversationRepository {
-  const SqliteConversationRepository(this._db);
+  SqliteConversationRepository(this._db);
 
   final Database _db;
+  var _messageSequence = 0;
 
   @override
   Future<List<OfflineConversation>> listConversations() async {
@@ -133,6 +141,66 @@ ORDER BY m.sent_at ASC, m.id ASC
       orderBy: 'created_at ASC, id ASC',
     );
     return rows.map(OfflineAttachment.fromRow).toList(growable: false);
+  }
+
+  @override
+  Future<OfflineMessage> sendTextMessage({
+    required String conversationId,
+    required String senderProfileId,
+    required String text,
+    DateTime? sentAt,
+  }) async {
+    final body = text.trim();
+    if (body.isEmpty) {
+      throw ArgumentError.value(text, 'text', 'Message text cannot be empty.');
+    }
+
+    final timestamp = (sentAt ?? DateTime.now()).toUtc();
+    final timestampValue = timestamp.toIso8601String();
+    final messageId =
+        'message_local_${timestamp.microsecondsSinceEpoch}_${_messageSequence++}';
+    final preview = body.length > 80 ? '${body.substring(0, 80)}…' : body;
+
+    return _db.transaction((txn) async {
+      await txn.insert('messages', {
+        'id': messageId,
+        'conversation_id': conversationId,
+        'sender_profile_id': senderProfileId,
+        'kind': 'text',
+        'text': body,
+        'sent_at': timestampValue,
+        'status': 'sent',
+        'is_recalled': 0,
+        'created_at': timestampValue,
+        'updated_at': timestampValue,
+      });
+
+      final updated = await txn.update(
+        'conversations',
+        {
+          'last_message_preview': preview,
+          'last_message_at': timestampValue,
+          'updated_at': timestampValue,
+        },
+        where: 'id = ?',
+        whereArgs: [conversationId],
+      );
+      if (updated != 1) {
+        throw StateError('Conversation $conversationId does not exist.');
+      }
+
+      final rows = await txn.rawQuery(
+        '''
+SELECT m.*, p.display_name AS sender_name
+FROM messages m
+JOIN profiles p ON p.id = m.sender_profile_id
+WHERE m.id = ?
+LIMIT 1
+''',
+        [messageId],
+      );
+      return OfflineMessage.fromRow(rows.single);
+    });
   }
 }
 

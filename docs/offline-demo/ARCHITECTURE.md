@@ -79,7 +79,8 @@ abstract interface class ConversationRepository {
 }
 ```
 
-`OfflineRepositoryBundle` 装配身份、联系人、会话、活动和设置仓储。P1 的通知已读写入由 `ActivityRepository` 完成；P2 增加消息发送等写操作时，必须在事务中同步会话最后消息、未读数等派生字段。
+`OfflineRepositoryBundle` 装配身份、联系人、会话、活动和设置仓储。通知已读写入由 `ActivityRepository` 完成；文本发送由 `ConversationRepository.sendTextMessage` 在一个事务中写入消息并同步会话最后消息与排序时间。后续未读、撤回和删除同样必须通过仓储事务维护派生字段。
+
 ## 场景与模拟器
 
 场景包由 `manifest.json`、结构化数据和媒体目录组成，可内置、导入、导出和复制。运行时模拟器只处理本地事件：

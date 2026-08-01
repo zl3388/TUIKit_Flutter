@@ -88,6 +88,14 @@
 - 通知已读数从 2 更新为 1，强制停止并重启后仍为 1，验证 SQLite 持久化。
 - 最终产物：`dist/android/TUIKit-OfflineDemo-P1-0.2.0+3.apk`，98,438,591 字节，SHA-256 `C513654A6DC3CF512154E47E02BDF66EBC40C20ABEA91B6D9FD72606EED01139`。
 - Git `origin` 已切换为 `https://github.com/zl3388/TUIKit_Flutter.git`，并验证 fork 的 `main` 分支可访问。
+### P2 消息候选验证
+
+- 会话页已实现按标题和最后消息摘要的本地搜索，并提供空结果与清除状态。
+- `ConversationRepository.sendTextMessage` 在单个 SQLite 事务中写入消息并更新会话摘要和排序时间。
+- Store 与聊天输入器已接通，发送后刷新消息列表和会话排序；空白文本在仓储边界被拒绝。
+- 新增发送成功跨重启持久化、发送失败无部分写入两项测试；完整测试共 8 项通过，离线模块静态分析无问题。
+- 候选 APK `0.3.0+4` 构建和覆盖安装成功；AAPT 确认仍无 `INTERNET` 权限，UI Automator 确认搜索框和聊天输入器已渲染。
+- 真机点击发送与强制停止后消息保留尚未完成：Redmi 进入安全锁屏后无线 ADB 变为 `offline`，P2-002/P2-004 暂不标记完成。
 
 ### 风险变化
 

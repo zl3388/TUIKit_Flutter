@@ -124,4 +124,80 @@ void main() {
     );
     expect(after, before);
   });
+
+  test('text send updates messages and conversation across reopen', () async {
+    final sentAt = DateTime.utc(2026, 7, 31, 12, 30);
+    var database = await OfflineDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(() async {
+      if (database.connection.isOpen) {
+        await database.close();
+      }
+    });
+
+    var repositories = OfflineRepositoryBundle(database);
+    final sent = await repositories.conversations.sendTextMessage(
+      conversationId: 'conversation_product',
+      senderProfileId: 'profile_current',
+      text: '  本地发送持久化验证  ',
+      sentAt: sentAt,
+    );
+    final messages = await repositories.conversations.listMessages(
+      'conversation_product',
+    );
+    final conversation = (await repositories.conversations.listConversations())
+        .singleWhere((item) => item.id == 'conversation_product');
+
+    expect(sent.text, '本地发送持久化验证');
+    expect(sent.status, 'sent');
+    expect(messages.last.id, sent.id);
+    expect(conversation.lastMessagePreview, sent.text);
+    expect(conversation.lastMessageAt, sentAt);
+
+    await database.close();
+    database = await OfflineDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    repositories = OfflineRepositoryBundle(database);
+
+    final reopenedMessages = await repositories.conversations.listMessages(
+      'conversation_product',
+    );
+    final reopenedConversation =
+        (await repositories.conversations.listConversations())
+            .singleWhere((item) => item.id == 'conversation_product');
+
+    expect(reopenedMessages.last.id, sent.id);
+    expect(reopenedConversation.lastMessagePreview, sent.text);
+    expect(reopenedConversation.lastMessageAt, sentAt);
+  });
+
+  test('failed text send does not leave a partial message', () async {
+    final database = await OfflineDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final repositories = OfflineRepositoryBundle(database);
+    final before = Sqflite.firstIntValue(
+      await database.connection.rawQuery('SELECT COUNT(*) FROM messages'),
+    );
+
+    await expectLater(
+      repositories.conversations.sendTextMessage(
+        conversationId: 'conversation_missing',
+        senderProfileId: 'profile_current',
+        text: '不应写入',
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+
+    final after = Sqflite.firstIntValue(
+      await database.connection.rawQuery('SELECT COUNT(*) FROM messages'),
+    );
+    expect(after, before);
+  });
 }

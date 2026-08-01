@@ -115,6 +115,22 @@ dist/android/TUIKit-OfflineDemo-P1-0.2.0+3.apk
 
 `file_picker` 固定为 `10.3.10`。其 11.x 版本在当前 AGP 9/Built-in Kotlin 组合下会禁用 Kotlin 插件并导致构建失败。
 
+## P2 消息候选产物
+
+```text
+dist/android/TUIKit-OfflineDemo-P2-messaging-0.3.0+4.apk
+```
+
+| 属性 | 值 |
+| --- | --- |
+| 文件大小 | 101,027,739 字节 |
+| SHA-256 | `6B587BCE5C0B74B5CFFD809A0C88296BB02D196EC66EEA32852AC472AE6615C3` |
+| 版本 | `0.3.0` (`versionCode 4`) |
+| SDK / ABI | min 24 / target 36；`arm64-v8a`, `armeabi-v7a`, `x86_64` |
+| 签名 | APK Signature Scheme v2，Android Debug 证书 |
+| 权限 | 无 `INTERNET`、相机、麦克风和存储权限 |
+| 当前验证 | 构建、静态检查、8 项测试、覆盖安装、搜索框与聊天输入器渲染 |
+| 待验证 | 真机点击发送、会话摘要更新、强制停止后的消息持久化 |
 ## 真机验证
 
 | 项目 | 结果 |
