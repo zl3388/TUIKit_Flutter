@@ -83,6 +83,7 @@ class OfflineConversation {
     required this.title,
     required this.lastMessagePreview,
     required this.lastMessageAt,
+    required this.draftText,
     required this.unreadCount,
     required this.isPinned,
     required this.isMuted,
@@ -95,6 +96,7 @@ class OfflineConversation {
   final String? avatarPath;
   final String lastMessagePreview;
   final DateTime lastMessageAt;
+  final String draftText;
   final int unreadCount;
   final bool isPinned;
   final bool isMuted;
@@ -107,6 +109,7 @@ class OfflineConversation {
         avatarPath: row['avatar_path'] as String?,
         lastMessagePreview: row['last_message_preview']! as String,
         lastMessageAt: DateTime.parse(row['last_message_at']! as String),
+        draftText: row['draft_text']! as String,
         unreadCount: row['unread_count']! as int,
         isPinned: row['is_pinned'] == 1,
         isMuted: row['is_muted'] == 1,

@@ -131,6 +131,24 @@ dist/android/TUIKit-OfflineDemo-P2-messaging-0.3.0+4.apk
 | 权限 | 无 `INTERNET`、相机、麦克风和存储权限 |
 | 当前验证 | 构建、静态检查、8 项测试、覆盖安装、搜索框与聊天输入器渲染 |
 | 待验证 | 真机点击发送、会话摘要更新、强制停止后的消息持久化 |
+
+## P2 会话管理候选产物
+
+```text
+dist/android/TUIKit-OfflineDemo-P2-conversations-0.4.0+5.apk
+```
+
+| 属性 | 值 |
+| --- | --- |
+| 文件大小 | 101,617,851 字节 |
+| SHA-256 | `1BDB5EC997629B599637FD446DCA099A72FA1873528D1D0BF3E1AC8667785480` |
+| 版本 | `0.4.0` (`versionCode 5`) |
+| SDK / ABI | min 24 / target 36；`arm64-v8a`, `armeabi-v7a`, `x86_64` |
+| 签名 | APK Signature Scheme v2，Android Debug 证书 |
+| 权限 | 仅应用动态广播接收器签名权限；无 `INTERNET`、相机、麦克风和存储权限 |
+| 当前验证 | 离线模块静态分析、完整 10 项测试、v1→v2 迁移、Release 构建、AAPT 和签名检查 |
+| 待验证 | Redmi K80 Pro 安装升级、置顶/免打扰/删除、草稿和发送后的重启持久化 |
+
 ## 真机验证
 
 | 项目 | 结果 |
@@ -145,6 +163,7 @@ dist/android/TUIKit-OfflineDemo-P2-messaging-0.3.0+4.apk
 | 日志 | 无 `FATAL EXCEPTION`、WorkDatabase、SDKAppID、TRTC、LiteAV、IM SDK 或腾讯云登录记录 |
 
 基线热修复包 `0.1.1+2` 的冷启动 440 ms 仍保留作为 P0 记录；后续功能验证应使用 P1 `0.2.0+3`。
+
 ## 已解决的最新版兼容问题
 
 1. AGP 9 不再接受 `proguard-android.txt`，已改用 `proguard-android-optimize.txt`。

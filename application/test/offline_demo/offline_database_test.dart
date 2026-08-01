@@ -26,7 +26,7 @@ void main() {
     }
   });
 
-  test('schema v1 creates all core tables and deterministic seed data',
+  test('current schema creates all core tables and deterministic seed data',
       () async {
     final database = await OfflineDatabase.open(
       factory: databaseFactoryFfi,
@@ -39,6 +39,7 @@ void main() {
     );
     final tableNames = tableRows.map((row) => row['name']).toSet();
     expect(tableNames, containsAll(OfflineSchema.expectedTables));
+    expect(await database.connection.getVersion(), OfflineSchema.version);
 
     final repositories = OfflineRepositoryBundle(database);
     final profile = await repositories.identity.currentProfile();
@@ -54,6 +55,7 @@ void main() {
     expect(profile.displayName, '林墨');
     expect(contacts, hasLength(4));
     expect(conversations, hasLength(4));
+    expect(conversations.every((item) => item.draftText.isEmpty), isTrue);
     expect(messages, hasLength(3));
     expect(notifications, hasLength(3));
     expect(announcements, hasLength(2));
@@ -138,6 +140,10 @@ void main() {
     });
 
     var repositories = OfflineRepositoryBundle(database);
+    await repositories.conversations.saveDraft(
+      'conversation_product',
+      '发送前草稿',
+    );
     final sent = await repositories.conversations.sendTextMessage(
       conversationId: 'conversation_product',
       senderProfileId: 'profile_current',
@@ -155,6 +161,7 @@ void main() {
     expect(messages.last.id, sent.id);
     expect(conversation.lastMessagePreview, sent.text);
     expect(conversation.lastMessageAt, sentAt);
+    expect(conversation.draftText, isEmpty);
 
     await database.close();
     database = await OfflineDatabase.open(
@@ -199,5 +206,83 @@ void main() {
       await database.connection.rawQuery('SELECT COUNT(*) FROM messages'),
     );
     expect(after, before);
+  });
+
+  test('migrates a version 1 database and preserves seeded conversations',
+      () async {
+    final legacy = await databaseFactoryFfi.openDatabase(
+      databasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: (database, version) => OfflineSchema.createV1(database),
+      ),
+    );
+    await legacy.close();
+
+    final database = await OfflineDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+
+    final columns = await database.connection.rawQuery(
+      'PRAGMA table_info(conversations)',
+    );
+    final columnNames = columns.map((row) => row['name']).toSet();
+    final repositories = OfflineRepositoryBundle(database);
+    final conversations = await repositories.conversations.listConversations();
+
+    expect(await database.connection.getVersion(), 2);
+    expect(columnNames, contains('draft_text'));
+    expect(conversations, hasLength(4));
+    expect(conversations.every((item) => item.draftText.isEmpty), isTrue);
+  });
+
+  test('conversation controls persist and deletion cascades local data',
+      () async {
+    final database = await OfflineDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final repositories = OfflineRepositoryBundle(database);
+
+    await repositories.conversations.setPinned('conversation_product', false);
+    await repositories.conversations.setMuted('conversation_product', true);
+    await repositories.conversations.markRead('conversation_product');
+    await repositories.conversations.saveDraft(
+      'conversation_product',
+      '待发送草稿',
+    );
+
+    final updated = (await repositories.conversations.listConversations())
+        .singleWhere((item) => item.id == 'conversation_product');
+    expect(updated.isPinned, isFalse);
+    expect(updated.isMuted, isTrue);
+    expect(updated.unreadCount, 0);
+    expect(updated.draftText, '待发送草稿');
+
+    await repositories.conversations.deleteConversation(
+      'conversation_assistant',
+    );
+    final deletedConversationCount = Sqflite.firstIntValue(
+      await database.connection.rawQuery(
+        "SELECT COUNT(*) FROM conversations WHERE id = 'conversation_assistant'",
+      ),
+    );
+    final deletedMessageCount = Sqflite.firstIntValue(
+      await database.connection.rawQuery(
+        "SELECT COUNT(*) FROM messages WHERE conversation_id = 'conversation_assistant'",
+      ),
+    );
+    final deletedMemberCount = Sqflite.firstIntValue(
+      await database.connection.rawQuery(
+        "SELECT COUNT(*) FROM conversation_members WHERE conversation_id = 'conversation_assistant'",
+      ),
+    );
+
+    expect(deletedConversationCount, 0);
+    expect(deletedMessageCount, 0);
+    expect(deletedMemberCount, 0);
   });
 }

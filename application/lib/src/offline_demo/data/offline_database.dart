@@ -27,7 +27,7 @@ class OfflineDatabase {
         onConfigure: (database) async {
           await database.execute('PRAGMA foreign_keys = ON');
         },
-        onCreate: (database, version) => OfflineSchema.createV1(database),
+        onCreate: (database, version) => OfflineSchema.createCurrent(database),
         onUpgrade: OfflineSchema.migrate,
       ),
     );

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../domain/models.dart';
@@ -22,6 +24,88 @@ class _ConversationsPageState extends State<ConversationsPage> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _openConversation(OfflineConversation conversation) async {
+    try {
+      if (conversation.unreadCount > 0) {
+        await widget.store.markConversationRead(conversation.id);
+      }
+      if (!mounted) {
+        return;
+      }
+      final current = widget.store.conversations
+          .singleWhere((item) => item.id == conversation.id);
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (context) => ConversationPage(
+            conversation: current,
+            currentProfileId: widget.store.profile!.id,
+            store: widget.store,
+          ),
+        ),
+      );
+      await widget.store.refreshConversations();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('会话操作失败：$error')),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleConversationAction(
+    OfflineConversation conversation,
+    _ConversationAction action,
+  ) async {
+    try {
+      switch (action) {
+        case _ConversationAction.togglePinned:
+          await widget.store.setConversationPinned(
+            conversation.id,
+            !conversation.isPinned,
+          );
+          break;
+        case _ConversationAction.toggleMuted:
+          await widget.store.setConversationMuted(
+            conversation.id,
+            !conversation.isMuted,
+          );
+          break;
+        case _ConversationAction.markRead:
+          await widget.store.markConversationRead(conversation.id);
+          break;
+        case _ConversationAction.delete:
+          final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('删除会话'),
+              content: Text('将删除“${conversation.title}”及其本地消息和附件。'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('删除'),
+                ),
+              ],
+            ),
+          );
+          if (confirmed == true) {
+            await widget.store.deleteConversation(conversation.id);
+          }
+          break;
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('会话操作失败：$error')),
+        );
+      }
+    }
   }
 
   @override
@@ -79,15 +163,9 @@ class _ConversationsPageState extends State<ConversationsPage> {
                       final conversation = conversations[index];
                       return _ConversationTile(
                         conversation: conversation,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (context) => ConversationPage(
-                              conversation: conversation,
-                              currentProfileId: profile.id,
-                              store: store,
-                            ),
-                          ),
-                        ),
+                        onTap: () => _openConversation(conversation),
+                        onAction: (action) =>
+                            _handleConversationAction(conversation, action),
                       );
                     },
                   ),
@@ -211,11 +289,18 @@ class _Metric extends StatelessWidget {
   }
 }
 
+enum _ConversationAction { togglePinned, toggleMuted, markRead, delete }
+
 class _ConversationTile extends StatelessWidget {
-  const _ConversationTile({required this.conversation, required this.onTap});
+  const _ConversationTile({
+    required this.conversation,
+    required this.onTap,
+    required this.onAction,
+  });
 
   final OfflineConversation conversation;
   final VoidCallback onTap;
+  final ValueChanged<_ConversationAction> onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -246,6 +331,52 @@ class _ConversationTile extends StatelessWidget {
                     color: const Color(0xFF7A878D),
                   ),
             ),
+            SizedBox.square(
+              dimension: 38,
+              child: PopupMenuButton<_ConversationAction>(
+                tooltip: '会话操作',
+                padding: EdgeInsets.zero,
+                onSelected: onAction,
+                icon: const Icon(Icons.more_vert_rounded, size: 20),
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: _ConversationAction.togglePinned,
+                    child: _MenuLabel(
+                      icon: conversation.isPinned
+                          ? Icons.push_pin_outlined
+                          : Icons.push_pin_rounded,
+                      label: conversation.isPinned ? '取消置顶' : '置顶',
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: _ConversationAction.toggleMuted,
+                    child: _MenuLabel(
+                      icon: conversation.isMuted
+                          ? Icons.notifications_outlined
+                          : Icons.notifications_off_outlined,
+                      label: conversation.isMuted ? '开启提醒' : '免打扰',
+                    ),
+                  ),
+                  if (conversation.unreadCount > 0)
+                    const PopupMenuItem(
+                      value: _ConversationAction.markRead,
+                      child: _MenuLabel(
+                        icon: Icons.mark_chat_read_outlined,
+                        label: '标为已读',
+                      ),
+                    ),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
+                    value: _ConversationAction.delete,
+                    child: _MenuLabel(
+                      icon: Icons.delete_outline_rounded,
+                      label: '删除会话',
+                      destructive: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
         subtitle: Padding(
@@ -253,12 +384,32 @@ class _ConversationTile extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  conversation.lastMessagePreview,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Color(0xFF64727A)),
-                ),
+                child: conversation.draftText.isEmpty
+                    ? Text(
+                        conversation.lastMessagePreview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Color(0xFF64727A)),
+                      )
+                    : Text.rich(
+                        TextSpan(
+                          children: [
+                            const TextSpan(
+                              text: '[草稿] ',
+                              style: TextStyle(
+                                color: Color(0xFFC35A20),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            TextSpan(
+                              text: conversation.draftText,
+                              style: const TextStyle(color: Color(0xFF64727A)),
+                            ),
+                          ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
               ),
               if (conversation.isMuted) ...[
                 const SizedBox(width: 8),
@@ -272,6 +423,30 @@ class _ConversationTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _MenuLabel extends StatelessWidget {
+  const _MenuLabel({
+    required this.icon,
+    required this.label,
+    this.destructive = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = destructive ? Theme.of(context).colorScheme.error : null;
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: color),
+        const SizedBox(width: 12),
+        Text(label, style: TextStyle(color: color)),
+      ],
     );
   }
 }
@@ -293,23 +468,29 @@ class ConversationPage extends StatefulWidget {
 }
 
 class _ConversationPageState extends State<ConversationPage> {
-  final _composerController = TextEditingController();
+  late final TextEditingController _composerController;
   final _scrollController = ScrollController();
   List<OfflineMessage> _messages = const [];
   Object? _loadError;
   var _isLoading = true;
   var _isSending = false;
   var _canSend = false;
+  Timer? _draftTimer;
 
   @override
   void initState() {
     super.initState();
-    _composerController.addListener(_handleComposerChanged);
+    _composerController = TextEditingController(
+      text: widget.conversation.draftText,
+    )..addListener(_handleComposerChanged);
+    _canSend = widget.conversation.draftText.trim().isNotEmpty;
     _loadMessages(scrollToEnd: true);
   }
 
   @override
   void dispose() {
+    _draftTimer?.cancel();
+    unawaited(_persistDraft());
     _composerController
       ..removeListener(_handleComposerChanged)
       ..dispose();
@@ -321,6 +502,22 @@ class _ConversationPageState extends State<ConversationPage> {
     final canSend = _composerController.text.trim().isNotEmpty;
     if (canSend != _canSend) {
       setState(() => _canSend = canSend);
+    }
+    _draftTimer?.cancel();
+    _draftTimer = Timer(
+      const Duration(milliseconds: 400),
+      () => unawaited(_persistDraft()),
+    );
+  }
+
+  Future<void> _persistDraft() async {
+    try {
+      await widget.store.saveConversationDraft(
+        widget.conversation.id,
+        _composerController.text,
+      );
+    } catch (_) {
+      // Draft persistence is best-effort while the composer is changing.
     }
   }
 
@@ -355,6 +552,7 @@ class _ConversationPageState extends State<ConversationPage> {
       return;
     }
 
+    _draftTimer?.cancel();
     setState(() => _isSending = true);
     try {
       await widget.store.sendTextMessage(

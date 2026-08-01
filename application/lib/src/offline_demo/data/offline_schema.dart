@@ -1,7 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 abstract final class OfflineSchema {
-  static const version = 1;
+  static const version = 2;
 
   static const expectedTables = <String>[
     'profiles',
@@ -173,6 +173,11 @@ CREATE TABLE settings (
     await batch.commit(noResult: true);
   }
 
+  static Future<void> createCurrent(Database db) async {
+    await createV1(db);
+    await migrate(db, 1, version);
+  }
+
   static Future<void> migrate(
     Database db,
     int oldVersion,
@@ -180,6 +185,11 @@ CREATE TABLE settings (
   ) async {
     if (oldVersion < 1 && newVersion >= 1) {
       await createV1(db);
+    }
+    if (oldVersion < 2 && newVersion >= 2) {
+      await db.execute(
+        "ALTER TABLE conversations ADD COLUMN draft_text TEXT NOT NULL DEFAULT ''",
+      );
     }
   }
 }

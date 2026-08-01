@@ -24,6 +24,16 @@ abstract interface class ConversationRepository {
     required String text,
     DateTime? sentAt,
   });
+
+  Future<void> setPinned(String conversationId, bool isPinned);
+
+  Future<void> setMuted(String conversationId, bool isMuted);
+
+  Future<void> markRead(String conversationId);
+
+  Future<void> saveDraft(String conversationId, String text);
+
+  Future<void> deleteConversation(String conversationId);
 }
 
 abstract interface class ActivityRepository {
@@ -180,6 +190,7 @@ ORDER BY m.sent_at ASC, m.id ASC
         {
           'last_message_preview': preview,
           'last_message_at': timestampValue,
+          'draft_text': '',
           'updated_at': timestampValue,
         },
         where: 'id = ?',
@@ -201,6 +212,62 @@ LIMIT 1
       );
       return OfflineMessage.fromRow(rows.single);
     });
+  }
+
+  @override
+  Future<void> setPinned(String conversationId, bool isPinned) {
+    return _updateConversation(
+      conversationId,
+      {'is_pinned': isPinned ? 1 : 0},
+    );
+  }
+
+  @override
+  Future<void> setMuted(String conversationId, bool isMuted) {
+    return _updateConversation(
+      conversationId,
+      {'is_muted': isMuted ? 1 : 0},
+    );
+  }
+
+  @override
+  Future<void> markRead(String conversationId) {
+    return _updateConversation(conversationId, {'unread_count': 0});
+  }
+
+  @override
+  Future<void> saveDraft(String conversationId, String text) {
+    return _updateConversation(conversationId, {'draft_text': text});
+  }
+
+  @override
+  Future<void> deleteConversation(String conversationId) async {
+    final deleted = await _db.delete(
+      'conversations',
+      where: 'id = ?',
+      whereArgs: [conversationId],
+    );
+    if (deleted != 1) {
+      throw StateError('Conversation $conversationId does not exist.');
+    }
+  }
+
+  Future<void> _updateConversation(
+    String conversationId,
+    Map<String, Object?> values,
+  ) async {
+    final updated = await _db.update(
+      'conversations',
+      {
+        ...values,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [conversationId],
+    );
+    if (updated != 1) {
+      throw StateError('Conversation $conversationId does not exist.');
+    }
   }
 }
 

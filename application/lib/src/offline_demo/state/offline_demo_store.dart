@@ -69,9 +69,46 @@ class OfflineDemoStore extends ChangeNotifier {
       senderProfileId: currentProfile.id,
       text: text,
     );
+    await refreshConversations();
+    return message;
+  }
+
+  Future<void> refreshConversations() async {
     conversations = await repositories.conversations.listConversations();
     notifyListeners();
-    return message;
+  }
+
+  Future<void> setConversationPinned(
+    String conversationId,
+    bool isPinned,
+  ) async {
+    await repositories.conversations.setPinned(conversationId, isPinned);
+    await refreshConversations();
+  }
+
+  Future<void> setConversationMuted(
+    String conversationId,
+    bool isMuted,
+  ) async {
+    await repositories.conversations.setMuted(conversationId, isMuted);
+    await refreshConversations();
+  }
+
+  Future<void> markConversationRead(String conversationId) async {
+    await repositories.conversations.markRead(conversationId);
+    await refreshConversations();
+  }
+
+  Future<void> saveConversationDraft(
+    String conversationId,
+    String text,
+  ) {
+    return repositories.conversations.saveDraft(conversationId, text);
+  }
+
+  Future<void> deleteConversation(String conversationId) async {
+    await repositories.conversations.deleteConversation(conversationId);
+    await refreshConversations();
   }
 
   Future<void> markNotificationRead(String notificationId) async {

@@ -18,7 +18,7 @@ application/lib/src/offline_demo/
   bootstrap/offline_bootstrap.dart  # 数据库、媒体与仓储装配
   data/
     offline_database.dart           # 连接、事务和仓储实现
-    offline_schema.dart             # schema v1 与迁移入口
+    offline_schema.dart             # schema v2 与逐版本迁移
     offline_seed.dart               # 确定性最小场景
     local_media_store.dart          # 导入、缩略图和清理
   domain/
@@ -34,14 +34,14 @@ application/lib/src/offline_demo/
 
 使用 SQLite 保存结构化数据，应用支持目录保存图片、音视频、文档和缩略图。数据库只保存相对路径、MIME、大小、校验和与展示元数据，不把大文件写入 BLOB。
 
-### Schema v1 已落地表
+### Schema v2 已落地表
 
 | 表 | 作用 |
 | --- | --- |
 | `profiles` | 当前离线身份、头像、状态、职位和资料 |
 | `org_units` | 企业/部门及层级关系 |
 | `contacts` | 联系人资料、部门、职位、状态和标签 |
-| `conversations` | 单聊、群聊、系统会话及置顶/免打扰/未读状态 |
+| `conversations` | 单聊、群聊、系统会话及置顶、免打扰、未读和草稿状态 |
 | `conversation_members` | 会话成员关系 |
 | `messages` | 消息方向、类型、正文、发送状态和时间 |
 | `message_attachments` | 本地附件、缩略图、MIME 和大小 |
@@ -50,7 +50,7 @@ application/lib/src/offline_demo/
 | `call_records` | 本地通话类型、方向、结果、时长和参与者 |
 | `settings` | 当前身份、模式、主题和场景设置 |
 
-P1 数据库版本为 1，启用外键和索引。首次启动在事务中写入确定性种子；已有数据库不会重复插入。测试覆盖首次初始化、重开保留修改、事务回滚和相对路径安全。
+当前数据库版本为 2，启用外键和索引。v2 为 `conversations` 增加 `draft_text`，新建数据库和 v1 升级均走逐版本迁移；迁移测试确认既有会话与种子数据保留。首次启动在事务中写入确定性种子，已有数据库不会重复插入。
 
 ### 后续表规划
 
@@ -79,7 +79,7 @@ abstract interface class ConversationRepository {
 }
 ```
 
-`OfflineRepositoryBundle` 装配身份、联系人、会话、活动和设置仓储。通知已读写入由 `ActivityRepository` 完成；文本发送由 `ConversationRepository.sendTextMessage` 在一个事务中写入消息并同步会话最后消息与排序时间。后续未读、撤回和删除同样必须通过仓储事务维护派生字段。
+`OfflineRepositoryBundle` 装配身份、联系人、会话、活动和设置仓储。通知已读写入由 `ActivityRepository` 完成；文本发送由 `ConversationRepository.sendTextMessage` 在一个事务中写入消息、清空草稿并同步会话最后消息与排序时间。会话置顶、免打扰、已读、草稿和删除也统一通过仓储；删除依赖 SQLite 外键级联清理成员、消息和附件。
 
 ## 场景与模拟器
 
@@ -113,4 +113,4 @@ P4 仍需补充系统飞行模式下的完整交互、长时间网络调用监�
 
 ## 数据迁移与备份
 
-数据库从版本 1 开始，每次 schema 变更必须提供正向迁移和迁移测试。场景导出包含 schema 版本、应用版本和 SHA-256；导入先在临时数据库验证，成功后事务替换，失败不影响现有数据。
+数据库从版本 1 开始，当前为版本 2。每次 schema 变更必须提供正向迁移和迁移测试。场景导出包含 schema 版本、应用版本和 SHA-256；导入先在临时数据库验证，成功后事务替换，失败不影响现有数据。
