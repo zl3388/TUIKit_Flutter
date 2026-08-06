@@ -6,6 +6,11 @@ import 'package:path/path.dart' as p;
 
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+const _publicTestKey = '79fbb424f3035e57c6d4cde3a6981de3';
+const _publicTestSalt = '86dbbb39ecd0da3e6e11df85f7a3da47';
+const _decryptedJournalSha256 =
+    '4abc4f053409a193c109576999f3deca4a213806aac6f82cecd9f72de36c4ca4';
+
 void main() {
   late Directory temporaryDirectory;
   late Directory sourceDirectory;
@@ -104,6 +109,74 @@ void main() {
     expect(await _snapshotSource(sourceDirectory), sourceBefore);
   });
 
+  test('imports an encrypted package with a salt-matched default key',
+      () async {
+    await _createEncryptedSourcePackage(sourceDirectory);
+    final sourceBefore = await _snapshotSource(sourceDirectory);
+
+    final imported = await _importer(_encryptedContract()).importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationDirectory,
+      defaultRawKeysBySalt: {
+        _publicTestSalt.toUpperCase(): _publicTestKey,
+      },
+    );
+
+    expect(imported.files['main.db']!.sha256, _decryptedJournalSha256);
+    expect(await _snapshotSource(sourceDirectory), sourceBefore);
+    final database = await imported.openReadOnly(
+      'main.db',
+      factory: databaseFactoryFfi,
+    );
+    addTearDown(database.close);
+    expect(
+      await database.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+      ),
+      [
+        {'name': 'journal_template_v2'},
+        {'name': 'journal_v1'},
+      ],
+    );
+  });
+
+  test('temporary key is tried after a mismatched default key', () async {
+    await _createEncryptedSourcePackage(sourceDirectory);
+
+    final imported = await _importer(_encryptedContract()).importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationDirectory,
+      defaultRawKeysBySalt: {
+        _publicTestSalt: '79fbb424f3035e57c6d4cde3a6981de2',
+      },
+      temporaryRawKeyHex: _publicTestKey,
+    );
+
+    expect(imported.files['main.db']!.sha256, _decryptedJournalSha256);
+  });
+
+  test('wrong decryption key preserves the source and destination', () async {
+    await _createEncryptedSourcePackage(sourceDirectory);
+    final sourceBefore = await _snapshotSource(sourceDirectory);
+
+    await expectLater(
+      _importer(_encryptedContract()).importPackage(
+        sourceDirectory: sourceDirectory,
+        destinationRoot: destinationDirectory,
+        temporaryRawKeyHex: '79fbb424f3035e57c6d4cde3a6981de2',
+      ),
+      throwsA(
+        isA<WeComPackageException>().having(
+          (error) => error.code,
+          'code',
+          WeComPackageIssueCode.decryptionFailed,
+        ),
+      ),
+    );
+
+    expect(await _snapshotSource(sourceDirectory), sourceBefore);
+    expect(await destinationDirectory.exists(), isFalse);
+  });
   test('missing required database fails before creating a destination',
       () async {
     await _createMainDatabase(sourceDirectory);
@@ -253,7 +326,7 @@ void main() {
     expect(await _snapshotSource(sourceDirectory), sourceBefore);
   });
 
-  test('non-plaintext input is rejected without touching the source', () async {
+  test('encrypted input requests a key without touching the source', () async {
     final main = File(p.join(sourceDirectory.path, 'main.db'));
     await main.writeAsBytes(List<int>.filled(4096, 7), flush: true);
     await File(p.join(sourceDirectory.path, 'empty.db')).create();
@@ -269,7 +342,7 @@ void main() {
             .having(
               (error) => error.code,
               'code',
-              WeComPackageIssueCode.encryptedOrUnsupportedInput,
+              WeComPackageIssueCode.decryptionKeyRequired,
             )
             .having((error) => error.fileName, 'fileName', 'main.db'),
       ),
@@ -284,6 +357,34 @@ WeComDatabasePackageImporter _importer(WeComPackageContract contract) {
   return WeComDatabasePackageImporter(
     contract: contract,
     databaseFactory: databaseFactoryFfi,
+  );
+}
+
+WeComPackageContract _encryptedContract() {
+  return WeComPackageContract(
+    formatVersion: 1,
+    scope: 'encrypted-test',
+    databases: [
+      WeComDatabaseContract(
+        fileName: 'main.db',
+        allowEmpty: false,
+        tables: const {
+          'journal_v1': <WeComColumnContract>[],
+          'journal_template_v2': <WeComColumnContract>[],
+        },
+        indexes: const {},
+        skipColumnValidation: const {
+          'journal_v1',
+          'journal_template_v2',
+        },
+      ),
+      WeComDatabaseContract(
+        fileName: 'empty.db',
+        allowEmpty: true,
+        tables: const {},
+        indexes: const {},
+      ),
+    ],
   );
 }
 
@@ -325,6 +426,13 @@ Map<String, List<WeComColumnContract>> _mainTableContract() {
       ),
     ],
   };
+}
+
+Future<void> _createEncryptedSourcePackage(Directory source) async {
+  await File(
+    p.join('test', 'fixtures', 'offline_demo', 'encrypted_journal.db'),
+  ).copy(p.join(source.path, 'main.db'));
+  await File(p.join(source.path, 'empty.db')).create();
 }
 
 Future<void> _createValidSourcePackage(Directory source) async {

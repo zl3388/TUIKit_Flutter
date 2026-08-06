@@ -50,6 +50,7 @@ dependencies:
   path: ^1.9.1
   file_picker: 10.3.10
   image: ^4.9.1
+  pointycastle: ^4.0.0
 
 dev_dependencies:
   flutter_test:

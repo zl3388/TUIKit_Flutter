@@ -6,6 +6,8 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import 'wecom_database_decryptor.dart';
+
 class WeComColumnContract {
   const WeComColumnContract({
     required this.name,
@@ -188,7 +190,8 @@ enum WeComPackageIssueCode {
   overlappingPaths,
   requiredFileMissing,
   emptyDatabaseNotAllowed,
-  encryptedOrUnsupportedInput,
+  decryptionKeyRequired,
+  decryptionFailed,
   sourceChanged,
   copyMismatch,
   sqliteOpenFailed,
@@ -307,10 +310,14 @@ class WeComDatabasePackageImporter {
 
   final WeComPackageContract contract;
   final DatabaseFactory databaseFactory;
+  final WxSQLite3DatabaseDecryptor _databaseDecryptor =
+      WxSQLite3DatabaseDecryptor();
 
   Future<WeComImportedPackage> importPackage({
     required Directory sourceDirectory,
     required Directory destinationRoot,
+    Map<String, String> defaultRawKeysBySalt = const {},
+    String? temporaryRawKeyHex,
   }) async {
     if (!await sourceDirectory.exists()) {
       throw const WeComPackageException(
@@ -349,10 +356,11 @@ class WeComDatabasePackageImporter {
         );
       }
       if (size > 0 && !await _hasSqliteHeader(sourceFile)) {
-        throw WeComPackageException(
-          WeComPackageIssueCode.encryptedOrUnsupportedInput,
-          'Input is not a decrypted SQLite database',
-          fileName: database.fileName,
+        return _importPreprocessedPackage(
+          sourceDirectory: sourceDirectory,
+          destinationRoot: destinationRoot,
+          defaultRawKeysBySalt: defaultRawKeysBySalt,
+          temporaryRawKeyHex: temporaryRawKeyHex,
         );
       }
       prepared.add(
@@ -458,6 +466,174 @@ class WeComDatabasePackageImporter {
     } catch (_) {
       await _deleteIfExists(stagingDirectory);
       rethrow;
+    }
+  }
+
+  Future<WeComImportedPackage> _importPreprocessedPackage({
+    required Directory sourceDirectory,
+    required Directory destinationRoot,
+    required Map<String, String> defaultRawKeysBySalt,
+    required String? temporaryRawKeyHex,
+  }) async {
+    final temporaryDirectory =
+        await Directory.systemTemp.createTemp('tui_wecom_preprocess_');
+    final snapshots = <_SourceSnapshot>[];
+    try {
+      for (final database in contract.databases) {
+        final sourceFile = File(
+          p.join(sourceDirectory.path, database.fileName),
+        );
+        if (!await sourceFile.exists()) {
+          throw WeComPackageException(
+            WeComPackageIssueCode.requiredFileMissing,
+            'Required database file is missing',
+            fileName: database.fileName,
+          );
+        }
+        final size = await sourceFile.length();
+        if (size == 0 && !database.allowEmpty) {
+          throw WeComPackageException(
+            WeComPackageIssueCode.emptyDatabaseNotAllowed,
+            'Database file is empty',
+            fileName: database.fileName,
+          );
+        }
+        final sourceHash = await _hashFile(sourceFile);
+        snapshots.add(
+          _SourceSnapshot(
+            file: sourceFile,
+            sizeBytes: size,
+            sha256: sourceHash,
+            fileName: database.fileName,
+          ),
+        );
+
+        final preparedFile = File(
+          p.join(temporaryDirectory.path, database.fileName),
+        );
+        if (size == 0) {
+          await preparedFile.create();
+        } else if (await _hasSqliteHeader(sourceFile)) {
+          await sourceFile.copy(preparedFile.path);
+          if (await _hashFile(preparedFile) != sourceHash) {
+            throw WeComPackageException(
+              WeComPackageIssueCode.copyMismatch,
+              'Prepared database does not match its source',
+              fileName: database.fileName,
+            );
+          }
+        } else {
+          await _decryptInput(
+            sourceFile: sourceFile,
+            outputFile: preparedFile,
+            fileName: database.fileName,
+            defaultRawKeysBySalt: defaultRawKeysBySalt,
+            temporaryRawKeyHex: temporaryRawKeyHex,
+          );
+        }
+      }
+
+      await _verifySourceSnapshots(snapshots);
+      return await importPackage(
+        sourceDirectory: temporaryDirectory,
+        destinationRoot: destinationRoot,
+      );
+    } finally {
+      await _deleteIfExists(temporaryDirectory);
+    }
+  }
+
+  Future<void> _decryptInput({
+    required File sourceFile,
+    required File outputFile,
+    required String fileName,
+    required Map<String, String> defaultRawKeysBySalt,
+    required String? temporaryRawKeyHex,
+  }) async {
+    late String salt;
+    try {
+      salt = await _databaseDecryptor.readSaltHex(sourceFile);
+    } on WxSQLite3DecryptException catch (error) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.decryptionFailed,
+        'Could not read the encrypted database header',
+        fileName: fileName,
+        cause: error,
+      );
+    }
+
+    final keys = <String>[];
+    final defaultKey = _defaultKeyForSalt(defaultRawKeysBySalt, salt);
+    if (defaultKey != null) {
+      keys.add(defaultKey);
+    }
+    if (temporaryRawKeyHex != null && !keys.contains(temporaryRawKeyHex)) {
+      keys.add(temporaryRawKeyHex);
+    }
+    if (keys.isEmpty) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.decryptionKeyRequired,
+        'No raw key was provided for encrypted database salt $salt',
+        fileName: fileName,
+      );
+    }
+
+    WxSQLite3DecryptException? lastKeyError;
+    for (final key in keys) {
+      try {
+        await _databaseDecryptor.decrypt(
+          input: sourceFile,
+          output: outputFile,
+          rawKeyHex: key,
+        );
+        return;
+      } on WxSQLite3DecryptException catch (error) {
+        if (error.code == WxSQLite3DecryptIssueCode.invalidKeyFormat ||
+            error.code == WxSQLite3DecryptIssueCode.keyValidationFailed) {
+          lastKeyError = error;
+          continue;
+        }
+        throw WeComPackageException(
+          WeComPackageIssueCode.decryptionFailed,
+          'Could not decrypt the database',
+          fileName: fileName,
+          cause: error,
+        );
+      }
+    }
+    throw WeComPackageException(
+      WeComPackageIssueCode.decryptionFailed,
+      'None of the provided raw keys could decrypt the database',
+      fileName: fileName,
+      cause: lastKeyError,
+    );
+  }
+
+  String? _defaultKeyForSalt(
+    Map<String, String> defaultRawKeysBySalt,
+    String salt,
+  ) {
+    for (final entry in defaultRawKeysBySalt.entries) {
+      if (entry.key.toLowerCase() == salt) {
+        return entry.value;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _verifySourceSnapshots(
+    List<_SourceSnapshot> snapshots,
+  ) async {
+    for (final snapshot in snapshots) {
+      if (!await snapshot.file.exists() ||
+          await snapshot.file.length() != snapshot.sizeBytes ||
+          await _hashFile(snapshot.file) != snapshot.sha256) {
+        throw WeComPackageException(
+          WeComPackageIssueCode.sourceChanged,
+          'Source changed during encrypted package import',
+          fileName: snapshot.fileName,
+        );
+      }
     }
   }
 
@@ -796,4 +972,18 @@ class _PreparedInput {
   final File sourceFile;
   final int sizeBytes;
   final String sha256;
+}
+
+class _SourceSnapshot {
+  const _SourceSnapshot({
+    required this.file,
+    required this.sizeBytes,
+    required this.sha256,
+    required this.fileName,
+  });
+
+  final File file;
+  final int sizeBytes;
+  final String sha256;
+  final String fileName;
 }
