@@ -178,6 +178,87 @@ void main() {
     expect(await destinationDirectory.exists(), isFalse);
   });
 
+  test('materializes committed WAL frames without changing source sidecars',
+      () async {
+    await _createValidSourcePackage(sourceDirectory);
+    final writer = await databaseFactoryFfi.openDatabase(
+      p.join(sourceDirectory.path, 'main.db'),
+      options: OpenDatabaseOptions(singleInstance: false),
+    );
+    try {
+      expect(
+        await writer.rawQuery('PRAGMA journal_mode = WAL'),
+        [
+          {'journal_mode': 'wal'}
+        ],
+      );
+      await writer.execute('PRAGMA wal_autocheckpoint = 0');
+      await writer.insert('notes', {'body': 'committed in wal'});
+      final walFile = File(p.join(sourceDirectory.path, 'main.db-wal'));
+      expect(await walFile.exists(), isTrue);
+      expect(await walFile.length(), greaterThan(0));
+      final sourceBefore = await _snapshotSource(sourceDirectory);
+
+      final imported = await _importer(_validContract()).importPackage(
+        sourceDirectory: sourceDirectory,
+        destinationRoot: destinationDirectory,
+      );
+
+      expect(await _snapshotSource(sourceDirectory), sourceBefore);
+      expect(
+          await File('${imported.databaseFile('main.db').path}-wal').exists(),
+          isFalse);
+      expect(
+          await File('${imported.databaseFile('main.db').path}-shm').exists(),
+          isFalse);
+      final database = await imported.openReadOnly(
+        'main.db',
+        factory: databaseFactoryFfi,
+      );
+      try {
+        expect(
+          await database.rawQuery('SELECT body FROM notes ORDER BY id'),
+          [
+            {'body': 'baseline'},
+            {'body': 'committed in wal'},
+          ],
+        );
+      } finally {
+        await database.close();
+      }
+    } finally {
+      await writer.close();
+    }
+  });
+
+  test('rejects encrypted databases with WAL without changing the source',
+      () async {
+    await _createEncryptedSourcePackage(sourceDirectory);
+    await File(p.join(sourceDirectory.path, 'main.db-wal')).writeAsBytes(
+      [1, 2, 3, 4],
+      flush: true,
+    );
+    final sourceBefore = await _snapshotSource(sourceDirectory);
+
+    await expectLater(
+      _importer(_encryptedContract()).importPackage(
+        sourceDirectory: sourceDirectory,
+        destinationRoot: destinationDirectory,
+        temporaryRawKeyHex: _publicTestKey,
+      ),
+      throwsA(
+        isA<WeComPackageException>().having(
+          (error) => error.code,
+          'code',
+          WeComPackageIssueCode.encryptedWalUnsupported,
+        ),
+      ),
+    );
+
+    expect(await _snapshotSource(sourceDirectory), sourceBefore);
+    expect(await destinationDirectory.exists(), isFalse);
+  });
+
   test('normalizes an empty private FTS table in the imported copy', () async {
     await _createPrivateFtsSourcePackage(sourceDirectory, withContent: false);
     final sourceBefore = await _snapshotSource(sourceDirectory);

@@ -192,6 +192,8 @@ enum WeComPackageIssueCode {
   emptyDatabaseNotAllowed,
   decryptionKeyRequired,
   decryptionFailed,
+  encryptedWalUnsupported,
+  walSnapshotFailed,
   privateFtsIndexNotEmpty,
   ftsConversionFailed,
   sourceChanged,
@@ -291,6 +293,7 @@ class WeComDatabasePackageImporter {
   });
 
   static const manifestFileName = 'dataset.json';
+  static const _walSnapshotAttempts = 3;
   static final _ftsTokenizerPattern = RegExp(
     r'''tokenize\s*=\s*['"]?([a-zA-Z0-9_]+)''',
     caseSensitive: false,
@@ -363,6 +366,7 @@ class WeComDatabasePackageImporter {
       }
       if (size > 0 &&
           (!await _hasSqliteHeader(sourceFile) ||
+              await _walFile(sourceFile).exists() ||
               (await _privateFtsSql(sourceFile, database)).isNotEmpty)) {
         return _importPreprocessedPackage(
           sourceDirectory: sourceDirectory,
@@ -379,6 +383,17 @@ class WeComDatabasePackageImporter {
           sha256: await _hashFile(sourceFile),
         ),
       );
+    }
+
+    for (final input in prepared) {
+      if (await _walFile(input.sourceFile).exists()) {
+        return _importPreprocessedPackage(
+          sourceDirectory: sourceDirectory,
+          destinationRoot: destinationRoot,
+          defaultRawKeysBySalt: defaultRawKeysBySalt,
+          temporaryRawKeyHex: temporaryRawKeyHex,
+        );
+      }
     }
 
     final datasetId = _datasetId(prepared);
@@ -400,6 +415,7 @@ class WeComDatabasePackageImporter {
     try {
       final manifestFiles = <String, WeComPackageFile>{};
       for (final input in prepared) {
+        await _requireWalAbsent(input.sourceFile, input.contract.fileName);
         final copiedFile = await input.sourceFile.copy(
           p.join(stagingDirectory.path, input.contract.fileName),
         );
@@ -413,6 +429,7 @@ class WeComDatabasePackageImporter {
           );
         }
 
+        await _requireWalAbsent(input.sourceFile, input.contract.fileName);
         if (input.sizeBytes > 0) {
           await _validateDatabase(copiedFile, input.contract);
         } else if (input.contract.tables.isNotEmpty ||
@@ -435,7 +452,8 @@ class WeComDatabasePackageImporter {
       }
 
       for (final input in prepared) {
-        if (await _hashFile(input.sourceFile) != input.sha256 ||
+        if (await _walFile(input.sourceFile).exists() ||
+            await _hashFile(input.sourceFile) != input.sha256 ||
             await input.sourceFile.length() != input.sizeBytes) {
           throw WeComPackageException(
             WeComPackageIssueCode.sourceChanged,
@@ -506,38 +524,64 @@ class WeComDatabasePackageImporter {
             fileName: database.fileName,
           );
         }
-        final sourceHash = await _hashFile(sourceFile);
-        snapshots.add(
-          _SourceSnapshot(
-            file: sourceFile,
-            sizeBytes: size,
-            sha256: sourceHash,
+        final walFile = _walFile(sourceFile);
+        final hasWal = await walFile.exists();
+        final isPlaintext = size > 0 && await _hasSqliteHeader(sourceFile);
+        if (hasWal && size == 0) {
+          throw WeComPackageException(
+            WeComPackageIssueCode.walSnapshotFailed,
+            'Empty placeholder cannot have a WAL sidecar',
             fileName: database.fileName,
-          ),
-        );
+          );
+        }
+        if (hasWal && !isPlaintext) {
+          throw WeComPackageException(
+            WeComPackageIssueCode.encryptedWalUnsupported,
+            'Encrypted databases with WAL are not supported',
+            fileName: database.fileName,
+          );
+        }
 
         final preparedFile = File(
           p.join(temporaryDirectory.path, database.fileName),
         );
         if (size == 0) {
+          snapshots.add(
+            await _captureSourceSnapshot(sourceFile, database.fileName),
+          );
           await preparedFile.create();
-        } else if (await _hasSqliteHeader(sourceFile)) {
-          await sourceFile.copy(preparedFile.path);
-          if (await _hashFile(preparedFile) != sourceHash) {
-            throw WeComPackageException(
-              WeComPackageIssueCode.copyMismatch,
-              'Prepared database does not match its source',
-              fileName: database.fileName,
-            );
-          }
-        } else {
-          await _decryptInput(
+        } else if (hasWal) {
+          await _snapshotWalDatabase(
             sourceFile: sourceFile,
+            walFile: walFile,
             outputFile: preparedFile,
             fileName: database.fileName,
-            defaultRawKeysBySalt: defaultRawKeysBySalt,
-            temporaryRawKeyHex: temporaryRawKeyHex,
           );
+        } else {
+          final snapshot = await _captureSourceSnapshot(
+            sourceFile,
+            database.fileName,
+          );
+          snapshots.add(snapshot);
+          if (isPlaintext) {
+            await sourceFile.copy(preparedFile.path);
+            if (!await _matchesSourceSnapshot(snapshot, file: preparedFile)) {
+              throw WeComPackageException(
+                WeComPackageIssueCode.copyMismatch,
+                'Prepared database does not match its source',
+                fileName: database.fileName,
+              );
+            }
+          } else {
+            await _decryptInput(
+              sourceFile: sourceFile,
+              outputFile: preparedFile,
+              fileName: database.fileName,
+              defaultRawKeysBySalt: defaultRawKeysBySalt,
+              temporaryRawKeyHex: temporaryRawKeyHex,
+            );
+          }
+          await _requireWalAbsent(sourceFile, database.fileName);
         }
         if (size > 0) {
           await _normalizePrivateFts(preparedFile, database);
@@ -551,6 +595,129 @@ class WeComDatabasePackageImporter {
       );
     } finally {
       await _deleteIfExists(temporaryDirectory);
+    }
+  }
+
+  File _walFile(File databaseFile) => File('${databaseFile.path}-wal');
+
+  Future<void> _requireWalAbsent(File databaseFile, String fileName) async {
+    if (await _walFile(databaseFile).exists()) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.sourceChanged,
+        'WAL appeared while the database was being copied; retry import',
+        fileName: fileName,
+      );
+    }
+  }
+
+  Future<_SourceSnapshot> _captureSourceSnapshot(
+    File file,
+    String fileName,
+  ) async {
+    return _SourceSnapshot(
+      file: file,
+      sizeBytes: await file.length(),
+      sha256: await _hashFile(file),
+      fileName: fileName,
+    );
+  }
+
+  Future<bool> _matchesSourceSnapshot(
+    _SourceSnapshot snapshot, {
+    File? file,
+  }) async {
+    final candidate = file ?? snapshot.file;
+    try {
+      return await candidate.exists() &&
+          await candidate.length() == snapshot.sizeBytes &&
+          await _hashFile(candidate) == snapshot.sha256;
+    } on FileSystemException {
+      return false;
+    }
+  }
+
+  Future<void> _snapshotWalDatabase({
+    required File sourceFile,
+    required File walFile,
+    required File outputFile,
+    required String fileName,
+  }) async {
+    Object? lastError;
+    for (var attempt = 0; attempt < _walSnapshotAttempts; attempt++) {
+      final scratchDirectory = Directory(
+        p.join(outputFile.parent.path, '.$fileName-wal-$attempt'),
+      );
+      await scratchDirectory.create();
+      try {
+        final databaseSnapshot = await _captureSourceSnapshot(
+          sourceFile,
+          fileName,
+        );
+        final walSnapshot = await _captureSourceSnapshot(
+          walFile,
+          '$fileName-wal',
+        );
+        final scratchDatabase = await sourceFile.copy(
+          p.join(scratchDirectory.path, fileName),
+        );
+        final scratchWal = await walFile.copy('${scratchDatabase.path}-wal');
+        final stable = await _matchesSourceSnapshot(databaseSnapshot) &&
+            await _matchesSourceSnapshot(walSnapshot) &&
+            await _matchesSourceSnapshot(
+              databaseSnapshot,
+              file: scratchDatabase,
+            ) &&
+            await _matchesSourceSnapshot(walSnapshot, file: scratchWal);
+        if (stable) {
+          await _vacuumWalSnapshot(
+            sourceFile: scratchDatabase,
+            outputFile: outputFile,
+            fileName: fileName,
+          );
+          return;
+        }
+      } on FileSystemException catch (error) {
+        lastError = error;
+      } finally {
+        await _deleteIfExists(scratchDirectory);
+      }
+      if (attempt + 1 < _walSnapshotAttempts) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+    throw WeComPackageException(
+      WeComPackageIssueCode.sourceChanged,
+      'Database or WAL changed during three snapshot attempts',
+      fileName: fileName,
+      cause: lastError,
+    );
+  }
+
+  Future<void> _vacuumWalSnapshot({
+    required File sourceFile,
+    required File outputFile,
+    required String fileName,
+  }) async {
+    Database? database;
+    try {
+      database = await databaseFactory.openDatabase(
+        sourceFile.path,
+        options: OpenDatabaseOptions(
+          readOnly: true,
+          singleInstance: false,
+        ),
+      );
+      final outputPath = outputFile.path.replaceAll("'", "''");
+      await database.execute("VACUUM INTO '$outputPath'");
+    } catch (error) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.walSnapshotFailed,
+        'Could not materialize a standalone SQLite snapshot from WAL',
+        fileName: fileName,
+        cause: error,
+      );
+    } finally {
+      await database?.close();
     }
   }
 
@@ -636,9 +803,8 @@ class WeComDatabasePackageImporter {
     List<_SourceSnapshot> snapshots,
   ) async {
     for (final snapshot in snapshots) {
-      if (!await snapshot.file.exists() ||
-          await snapshot.file.length() != snapshot.sizeBytes ||
-          await _hashFile(snapshot.file) != snapshot.sha256) {
+      if (await _walFile(snapshot.file).exists() ||
+          !await _matchesSourceSnapshot(snapshot)) {
         throw WeComPackageException(
           WeComPackageIssueCode.sourceChanged,
           'Source changed during preprocessed package import',
