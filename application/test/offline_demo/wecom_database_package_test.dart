@@ -177,6 +177,64 @@ void main() {
     expect(await _snapshotSource(sourceDirectory), sourceBefore);
     expect(await destinationDirectory.exists(), isFalse);
   });
+
+  test('normalizes an empty private FTS table in the imported copy', () async {
+    await _createPrivateFtsSourcePackage(sourceDirectory, withContent: false);
+    final sourceBefore = await _snapshotSource(sourceDirectory);
+
+    final imported = await _importer(_privateFtsContract()).importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationDirectory,
+    );
+
+    expect(await _snapshotSource(sourceDirectory), sourceBefore);
+    final database = await imported.openReadOnly(
+      'main.db',
+      factory: databaseFactoryFfi,
+    );
+    addTearDown(database.close);
+    final schema = await database.rawQuery(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+      ['fts_probe'],
+    );
+    expect(schema.single['sql'], contains('tokenize=unicode61'));
+    expect(
+      await database.rawQuery('SELECT COUNT(*) AS count FROM fts_probe'),
+      [
+        {'count': 0}
+      ],
+    );
+    expect(
+      await database.rawQuery('PRAGMA integrity_check'),
+      [
+        {'integrity_check': 'ok'}
+      ],
+    );
+  });
+
+  test('rejects a non-empty private FTS index without changing the source',
+      () async {
+    await _createPrivateFtsSourcePackage(sourceDirectory, withContent: true);
+    final sourceBefore = await _snapshotSource(sourceDirectory);
+
+    await expectLater(
+      _importer(_privateFtsContract()).importPackage(
+        sourceDirectory: sourceDirectory,
+        destinationRoot: destinationDirectory,
+      ),
+      throwsA(
+        isA<WeComPackageException>().having(
+          (error) => error.code,
+          'code',
+          WeComPackageIssueCode.privateFtsIndexNotEmpty,
+        ),
+      ),
+    );
+
+    expect(await _snapshotSource(sourceDirectory), sourceBefore);
+    expect(await destinationDirectory.exists(), isFalse);
+  });
+
   test('missing required database fails before creating a destination',
       () async {
     await _createMainDatabase(sourceDirectory);
@@ -409,6 +467,31 @@ WeComPackageContract _validContract() {
   );
 }
 
+WeComPackageContract _privateFtsContract() {
+  const ftsTables = {
+    'fts_probe': <WeComColumnContract>[],
+    'fts_probe_config': <WeComColumnContract>[],
+    'fts_probe_content': <WeComColumnContract>[],
+    'fts_probe_data': <WeComColumnContract>[],
+    'fts_probe_docsize': <WeComColumnContract>[],
+    'fts_probe_idx': <WeComColumnContract>[],
+  };
+  return WeComPackageContract(
+    formatVersion: 1,
+    scope: 'private-fts-test',
+    databases: [
+      WeComDatabaseContract(
+        fileName: 'main.db',
+        allowEmpty: false,
+        tables: ftsTables,
+        indexes: const {},
+        skipColumnValidation: ftsTables.keys.toSet(),
+        expectedFtsTokenizers: const {'fts_probe': 'unicode61'},
+      ),
+    ],
+  );
+}
+
 Map<String, List<WeComColumnContract>> _mainTableContract() {
   return {
     'notes': const [
@@ -459,6 +542,40 @@ Future<void> _createMainDatabase(Directory source) async {
       },
     ),
   );
+  await database.close();
+}
+
+Future<void> _createPrivateFtsSourcePackage(
+  Directory source, {
+  required bool withContent,
+}) async {
+  final database = await databaseFactoryFfi.openDatabase(
+    p.join(source.path, 'main.db'),
+    options: OpenDatabaseOptions(singleInstance: false),
+  );
+  await database.execute(
+    'CREATE VIRTUAL TABLE fts_probe USING fts5('
+    "content, prefix='1 2 3 4 5 6 7 8 9 10', tokenize='unicode61'"
+    ')',
+  );
+  if (withContent) {
+    await database.execute(
+      "INSERT INTO fts_probe(content) VALUES ('indexed content')",
+    );
+  }
+  await database.execute('PRAGMA writable_schema = ON');
+  try {
+    final updated = await database.rawUpdate(
+      "UPDATE sqlite_master SET sql = 'CREATE VIRTUAL TABLE fts_probe "
+      "USING fts5(content, prefix=''1 2 3 4 5 6 7 8 9 10'', "
+      "tokenize=fts5word)' WHERE type = 'table' AND name = 'fts_probe'",
+    );
+    if (updated != 1) {
+      throw StateError('Could not prepare the private FTS test fixture');
+    }
+  } finally {
+    await database.execute('PRAGMA writable_schema = OFF');
+  }
   await database.close();
 }
 

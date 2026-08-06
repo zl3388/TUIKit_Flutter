@@ -192,6 +192,8 @@ enum WeComPackageIssueCode {
   emptyDatabaseNotAllowed,
   decryptionKeyRequired,
   decryptionFailed,
+  privateFtsIndexNotEmpty,
+  ftsConversionFailed,
   sourceChanged,
   copyMismatch,
   sqliteOpenFailed,
@@ -289,6 +291,10 @@ class WeComDatabasePackageImporter {
   });
 
   static const manifestFileName = 'dataset.json';
+  static final _ftsTokenizerPattern = RegExp(
+    r'''tokenize\s*=\s*['"]?([a-zA-Z0-9_]+)''',
+    caseSensitive: false,
+  );
   static const _sqliteHeader = <int>[
     0x53,
     0x51,
@@ -355,7 +361,9 @@ class WeComDatabasePackageImporter {
           fileName: database.fileName,
         );
       }
-      if (size > 0 && !await _hasSqliteHeader(sourceFile)) {
+      if (size > 0 &&
+          (!await _hasSqliteHeader(sourceFile) ||
+              (await _privateFtsSql(sourceFile, database)).isNotEmpty)) {
         return _importPreprocessedPackage(
           sourceDirectory: sourceDirectory,
           destinationRoot: destinationRoot,
@@ -531,6 +539,9 @@ class WeComDatabasePackageImporter {
             temporaryRawKeyHex: temporaryRawKeyHex,
           );
         }
+        if (size > 0) {
+          await _normalizePrivateFts(preparedFile, database);
+        }
       }
 
       await _verifySourceSnapshots(snapshots);
@@ -630,11 +641,174 @@ class WeComDatabasePackageImporter {
           await _hashFile(snapshot.file) != snapshot.sha256) {
         throw WeComPackageException(
           WeComPackageIssueCode.sourceChanged,
-          'Source changed during encrypted package import',
+          'Source changed during preprocessed package import',
           fileName: snapshot.fileName,
         );
       }
     }
+  }
+
+  Future<Map<String, String>> _privateFtsSql(
+    File file,
+    WeComDatabaseContract databaseContract,
+  ) async {
+    if (databaseContract.expectedFtsTokenizers.isEmpty) {
+      return const {};
+    }
+
+    Database? database;
+    try {
+      database = await databaseFactory.openDatabase(
+        file.path,
+        options: OpenDatabaseOptions(
+          readOnly: true,
+          singleInstance: false,
+        ),
+      );
+      final rows = await database.rawQuery(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table'",
+      );
+      final tableSql = {
+        for (final row in rows) row['name']! as String: row['sql'] as String?,
+      };
+      final privateTables = <String, String>{};
+      for (final entry in databaseContract.expectedFtsTokenizers.entries) {
+        if (entry.value != 'unicode61') {
+          continue;
+        }
+        final sql = tableSql[entry.key];
+        if (sql != null && _ftsTokenizer(sql) == 'fts5word') {
+          privateTables[entry.key] = sql;
+        }
+      }
+      return privateTables;
+    } catch (error) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.sqliteOpenFailed,
+        'Could not inspect FTS tokenizer metadata',
+        fileName: databaseContract.fileName,
+        cause: error,
+      );
+    } finally {
+      await database?.close();
+    }
+  }
+
+  Future<void> _normalizePrivateFts(
+    File file,
+    WeComDatabaseContract databaseContract,
+  ) async {
+    final privateTables = await _privateFtsSql(file, databaseContract);
+    if (privateTables.isEmpty) {
+      return;
+    }
+
+    Database? database;
+    try {
+      database = await databaseFactory.openDatabase(
+        file.path,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      for (final tableName in privateTables.keys) {
+        for (final suffix in const ['_content', '_docsize', '_idx']) {
+          final shadowName = '$tableName$suffix';
+          if (!databaseContract.tables.containsKey(shadowName)) {
+            throw WeComPackageException(
+              WeComPackageIssueCode.ftsConversionFailed,
+              'Private FTS table has an unsupported shadow-table layout',
+              fileName: databaseContract.fileName,
+            );
+          }
+          final escapedName = shadowName.replaceAll('"', '""');
+          final rows = await database.rawQuery(
+            'SELECT COUNT(*) AS row_count FROM "$escapedName"',
+          );
+          final count = (rows.single['row_count']! as num).toInt();
+          if (count != 0) {
+            throw WeComPackageException(
+              WeComPackageIssueCode.privateFtsIndexNotEmpty,
+              'Private FTS index $tableName contains data and cannot be '
+              'converted without the fts5word extension',
+              fileName: databaseContract.fileName,
+            );
+          }
+        }
+      }
+
+      final versionRows = await database.rawQuery('PRAGMA schema_version');
+      final schemaVersion = (versionRows.single.values.single! as num).toInt();
+      await database.execute('PRAGMA writable_schema = ON');
+      try {
+        for (final entry in privateTables.entries) {
+          final portableSql = _portableFtsSql(entry.value);
+          final updated = await database.rawUpdate(
+            "UPDATE sqlite_master SET sql = ? "
+            "WHERE type = 'table' AND name = ?",
+            [portableSql, entry.key],
+          );
+          if (updated != 1) {
+            throw WeComPackageException(
+              WeComPackageIssueCode.ftsConversionFailed,
+              'Private FTS schema row could not be prepared for conversion',
+              fileName: databaseContract.fileName,
+            );
+          }
+        }
+      } finally {
+        await database.execute('PRAGMA writable_schema = OFF');
+      }
+      await database.execute('PRAGMA schema_version = ${schemaVersion + 1}');
+      await database.close();
+      database = null;
+
+      database = await databaseFactory.openDatabase(
+        file.path,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      await database.transaction((transaction) async {
+        for (final entry in privateTables.entries) {
+          final escapedName = entry.key.replaceAll('"', '""');
+          await transaction.execute('DROP TABLE "$escapedName"');
+          await transaction.execute(_portableFtsSql(entry.value));
+        }
+      });
+    } on WeComPackageException {
+      rethrow;
+    } catch (error) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.ftsConversionFailed,
+        'Could not rebuild the private FTS table as unicode61',
+        fileName: databaseContract.fileName,
+        cause: error,
+      );
+    } finally {
+      await database?.close();
+    }
+  }
+
+  String _portableFtsSql(String sql) {
+    final match = _ftsTokenizerPattern.firstMatch(sql);
+    if (match == null || match.group(1)?.toLowerCase() != 'fts5word') {
+      throw const WeComPackageException(
+        WeComPackageIssueCode.ftsConversionFailed,
+        'Private FTS tokenizer declaration is not recognized',
+      );
+    }
+    final tokenizer = match.group(1)!;
+    final tokenizerStart = match.start + match.group(0)!.lastIndexOf(tokenizer);
+    return sql.replaceRange(
+      tokenizerStart,
+      tokenizerStart + tokenizer.length,
+      'unicode61',
+    );
+  }
+
+  String _ftsTokenizer(String sql) {
+    final normalized = sql.toLowerCase();
+    if (!normalized.contains('using fts5')) {
+      return '';
+    }
+    return _ftsTokenizerPattern.firstMatch(normalized)?.group(1) ?? 'unicode61';
   }
 
   Future<void> _validateDatabase(
@@ -749,21 +923,16 @@ class WeComDatabasePackageImporter {
     WeComDatabaseContract databaseContract,
     Map<String, String?> tableSql,
   ) {
-    final tokenizerPattern = RegExp(
-      r'''tokenize\s*=\s*['"]?([a-zA-Z0-9_]+)''',
-      caseSensitive: false,
-    );
     for (final entry in databaseContract.expectedFtsTokenizers.entries) {
-      final sql = tableSql[entry.key]?.toLowerCase();
-      if (sql == null || !sql.contains('using fts5')) {
+      final sql = tableSql[entry.key];
+      if (sql == null || !sql.toLowerCase().contains('using fts5')) {
         throw WeComPackageException(
           WeComPackageIssueCode.schemaMismatch,
           'Expected an FTS5 virtual table for ${entry.key}',
           fileName: databaseContract.fileName,
         );
       }
-      final match = tokenizerPattern.firstMatch(sql);
-      final tokenizer = match?.group(1)?.toLowerCase() ?? 'unicode61';
+      final tokenizer = _ftsTokenizer(sql);
       if (entry.value != tokenizer) {
         throw WeComPackageException(
           WeComPackageIssueCode.schemaMismatch,
