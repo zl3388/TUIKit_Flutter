@@ -76,6 +76,7 @@ flutter:
   generate: true
   assets:
     - assets/
+    - assets/offline_demo/
     - assets/beauty_panel/
     - assets/beauty_panel/panel_icon/beauty/
     - assets/beauty_panel/panel_icon/beauty/beauty_smooth/
