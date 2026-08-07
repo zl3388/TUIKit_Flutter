@@ -24,6 +24,8 @@ class WeComDirectoryRepository {
       '''
 SELECT
   id,
+  real_name,
+  name,
   COALESCE(
     NULLIF(real_name, ''),
     NULLIF(name, ''),

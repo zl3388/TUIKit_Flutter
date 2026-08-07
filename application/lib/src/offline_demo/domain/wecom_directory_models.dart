@@ -2,6 +2,8 @@ class WeComInternalContact {
   const WeComInternalContact({
     required this.id,
     required this.displayName,
+    required this.name,
+    this.realName,
     this.account,
     this.externalCorporationName,
     this.externalJob,
@@ -9,6 +11,8 @@ class WeComInternalContact {
 
   final int id;
   final String displayName;
+  final String name;
+  final String? realName;
   final String? account;
   final String? externalCorporationName;
   final String? externalJob;
@@ -17,10 +21,40 @@ class WeComInternalContact {
     return WeComInternalContact(
       id: row['id']! as int,
       displayName: row['display_name']! as String,
+      name: row['name']! as String,
+      realName: row['real_name'] as String?,
       account: row['account'] as String?,
       externalCorporationName: row['external_corp_name'] as String?,
       externalJob: row['external_job'] as String?,
     );
+  }
+
+  factory WeComInternalContact.fromFields({
+    required int id,
+    required String name,
+    String? realName,
+    String? account,
+    String? externalCorporationName,
+    String? externalJob,
+  }) {
+    return WeComInternalContact(
+      id: id,
+      displayName: _firstNonEmpty([realName, name, account]),
+      name: name,
+      realName: realName,
+      account: account,
+      externalCorporationName: externalCorporationName,
+      externalJob: externalJob,
+    );
+  }
+
+  static String _firstNonEmpty(Iterable<String?> values) {
+    for (final value in values) {
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+    return '';
   }
 }
 
