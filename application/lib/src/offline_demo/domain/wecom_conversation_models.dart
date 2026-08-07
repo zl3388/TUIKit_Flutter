@@ -51,6 +51,44 @@ class WeComConversationSummary {
             ),
     );
   }
+
+  factory WeComConversationSummary.fromFields({
+    required int numericId,
+    required String id,
+    required String name,
+    required String? roomNameRemark,
+    required int? lastMessageTime,
+    required int? lastMessageId,
+    required int pinnedFlag,
+    required int blockedFlag,
+    required int status,
+    required int? foldStatus,
+    required WeComConversationUnreadState? unreadState,
+  }) {
+    return WeComConversationSummary(
+      numericId: numericId,
+      id: id,
+      displayName: _firstNonEmpty([roomNameRemark, name]),
+      name: name,
+      roomNameRemark: roomNameRemark,
+      lastMessageTime: lastMessageTime,
+      lastMessageId: lastMessageId,
+      pinnedFlag: pinnedFlag,
+      blockedFlag: blockedFlag,
+      status: status,
+      foldStatus: foldStatus,
+      unreadState: unreadState,
+    );
+  }
+
+  static String _firstNonEmpty(Iterable<String?> values) {
+    for (final value in values) {
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+    return '';
+  }
 }
 
 class WeComConversationUnreadState {
