@@ -13,6 +13,13 @@ class WeComOverlayTarget {
 class WeComOverlayContractValidator {
   WeComOverlayContractValidator(this._contract);
 
+  static const compatibleCopyTargets = <String>{
+    'user.db/user_table',
+    'session.db/conversation_table',
+    'session.db/unread_conversation_table',
+    'session.db/conversation_user_table',
+  };
+
   static const _ftsShadowSuffixes = <String>[
     'config',
     'content',

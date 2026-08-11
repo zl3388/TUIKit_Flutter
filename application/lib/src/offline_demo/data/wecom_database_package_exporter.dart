@@ -75,13 +75,6 @@ class WeComDatabasePackageExporter {
         _databaseFactory = databaseFactory,
         _validator = WeComOverlayContractValidator(contract);
 
-  static const _certifiedTargets = <String>{
-    'user.db/user_table',
-    'session.db/conversation_table',
-    'session.db/unread_conversation_table',
-    'session.db/conversation_user_table',
-  };
-
   final WeComPackageContract _contract;
   final DatabaseFactory _databaseFactory;
   final WeComOverlayContractValidator _validator;
@@ -202,7 +195,8 @@ class WeComDatabasePackageExporter {
           'Overlay revision metadata is malformed',
         );
       }
-      if (!_certifiedTargets.contains('$databaseName/$tableName')) {
+      if (!WeComOverlayContractValidator.compatibleCopyTargets
+          .contains('$databaseName/$tableName')) {
         throw WeComExportException(
           WeComExportIssueCode.unsupportedTarget,
           'Overlay target has not passed export certification',
