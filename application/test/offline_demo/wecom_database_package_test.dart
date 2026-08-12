@@ -60,6 +60,36 @@ void main() {
     );
   });
 
+  test('rejects invalid and missing imported dataset IDs', () async {
+    final importer = _importer(_validContract());
+    await expectLater(
+      importer.openImportedPackage(
+        destinationRoot: destinationDirectory,
+        datasetId: '../outside',
+      ),
+      throwsA(
+        isA<WeComPackageException>().having(
+          (error) => error.code,
+          'code',
+          WeComPackageIssueCode.invalidDatasetId,
+        ),
+      ),
+    );
+    await expectLater(
+      importer.openImportedPackage(
+        destinationRoot: destinationDirectory,
+        datasetId:
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+      throwsA(
+        isA<WeComPackageException>().having(
+          (error) => error.code,
+          'code',
+          WeComPackageIssueCode.importedPackageMissing,
+        ),
+      ),
+    );
+  });
   test('imports a validated copy and reuses the content-addressed dataset',
       () async {
     await _createValidSourcePackage(sourceDirectory);
@@ -106,6 +136,14 @@ void main() {
     expect(reused.reusedExisting, isTrue);
     expect(reused.datasetId, imported.datasetId);
     expect(reused.directory.path, imported.directory.path);
+
+    final reopened = await importer.openImportedPackage(
+      destinationRoot: destinationDirectory,
+      datasetId: imported.datasetId,
+    );
+    expect(reopened.reusedExisting, isTrue);
+    expect(reopened.datasetId, imported.datasetId);
+    expect(reopened.files.keys, imported.files.keys);
     expect(await _snapshotSource(sourceDirectory), sourceBefore);
   });
 

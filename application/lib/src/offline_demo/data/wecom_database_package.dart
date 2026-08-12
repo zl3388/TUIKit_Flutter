@@ -202,6 +202,8 @@ enum WeComPackageIssueCode {
   integrityCheckFailed,
   schemaMismatch,
   existingPackageCorrupt,
+  importedPackageMissing,
+  invalidDatasetId,
   importCommitFailed,
 }
 
@@ -294,6 +296,7 @@ class WeComDatabasePackageImporter {
 
   static const manifestFileName = 'dataset.json';
   static const _walSnapshotAttempts = 3;
+  static final _datasetIdPattern = RegExp(r'^[0-9a-f]{64}$');
   static final _ftsTokenizerPattern = RegExp(
     r'''tokenize\s*=\s*['"]?([a-zA-Z0-9_]+)''',
     caseSensitive: false,
@@ -321,6 +324,32 @@ class WeComDatabasePackageImporter {
   final DatabaseFactory databaseFactory;
   final WxSQLite3DatabaseDecryptor _databaseDecryptor =
       WxSQLite3DatabaseDecryptor();
+
+  Future<WeComImportedPackage> openImportedPackage({
+    required Directory destinationRoot,
+    required String datasetId,
+  }) async {
+    if (!_datasetIdPattern.hasMatch(datasetId)) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.invalidDatasetId,
+        'Dataset ID must be 64 lowercase hexadecimal characters',
+      );
+    }
+    final directory = Directory(
+      p.join(
+        p.normalize(p.absolute(destinationRoot.path)),
+        'datasets',
+        datasetId,
+      ),
+    );
+    if (!await directory.exists()) {
+      throw const WeComPackageException(
+        WeComPackageIssueCode.importedPackageMissing,
+        'Imported package directory does not exist',
+      );
+    }
+    return _openExisting(directory, datasetId);
+  }
 
   Future<WeComImportedPackage> importPackage({
     required Directory sourceDirectory,
@@ -401,7 +430,7 @@ class WeComDatabasePackageImporter {
     await datasetsRoot.create(recursive: true);
     final finalDirectory = Directory(p.join(datasetsRoot.path, datasetId));
     if (await finalDirectory.exists()) {
-      return _reuseExisting(finalDirectory, datasetId, prepared);
+      return _openExisting(finalDirectory, datasetId);
     }
 
     final stagingDirectory = Directory(
@@ -474,7 +503,7 @@ class WeComDatabasePackageImporter {
       } on FileSystemException catch (error) {
         if (await finalDirectory.exists()) {
           await _deleteIfExists(stagingDirectory);
-          return _reuseExisting(finalDirectory, datasetId, prepared);
+          return _openExisting(finalDirectory, datasetId);
         }
         throw WeComPackageException(
           WeComPackageIssueCode.importCommitFailed,
@@ -1127,10 +1156,9 @@ class WeComDatabasePackageImporter {
     );
   }
 
-  Future<WeComImportedPackage> _reuseExisting(
+  Future<WeComImportedPackage> _openExisting(
     Directory directory,
     String datasetId,
-    List<_PreparedInput> prepared,
   ) async {
     final manifest = File(p.join(directory.path, manifestFileName));
     if (!await manifest.exists()) {
@@ -1173,57 +1201,95 @@ class WeComDatabasePackageImporter {
       );
     }
 
-    if (manifestFiles.length != prepared.length) {
+    final expectedNames =
+        contract.databases.map((database) => database.fileName).toSet();
+    if (manifestFiles.length != expectedNames.length ||
+        !manifestFiles.keys.toSet().containsAll(expectedNames)) {
       throw const WeComPackageException(
         WeComPackageIssueCode.existingPackageCorrupt,
         'Existing package manifest has an unexpected file set',
       );
     }
 
+    final allowedEntries = <String>{manifestFileName, ...expectedNames};
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is! File ||
+          !allowedEntries.contains(p.basename(entity.path))) {
+        throw const WeComPackageException(
+          WeComPackageIssueCode.existingPackageCorrupt,
+          'Existing package directory contains unexpected entries',
+        );
+      }
+    }
+
     final files = <String, WeComPackageFile>{};
-    for (final input in prepared) {
-      final manifestEntry = manifestFiles[input.contract.fileName];
-      if (manifestEntry == null ||
-          manifestEntry['sha256'] != input.sha256 ||
-          manifestEntry['sizeBytes'] != input.sizeBytes) {
+    for (final databaseContract in contract.databases) {
+      final entry = manifestFiles[databaseContract.fileName]!;
+      final hash = entry['sha256'];
+      final size = entry['sizeBytes'];
+      final tableCount = entry['tableCount'];
+      final indexCount = entry['indexCount'];
+      final isEmpty = entry['isEmptyPlaceholder'];
+      if (hash is! String ||
+          !_datasetIdPattern.hasMatch(hash) ||
+          size is! int ||
+          size < 0 ||
+          tableCount is! int ||
+          tableCount < 0 ||
+          indexCount is! int ||
+          indexCount < 0 ||
+          isEmpty is! bool ||
+          isEmpty != (size == 0)) {
         throw WeComPackageException(
           WeComPackageIssueCode.existingPackageCorrupt,
-          'Existing package manifest does not match its dataset ID',
-          fileName: input.contract.fileName,
+          'Existing package manifest file metadata is invalid',
+          fileName: databaseContract.fileName,
         );
       }
 
-      final file = File(p.join(directory.path, input.contract.fileName));
-      if (!await file.exists() ||
-          await file.length() != input.sizeBytes ||
-          await _hashFile(file) != input.sha256) {
+      if (isEmpty && !databaseContract.allowEmpty) {
         throw WeComPackageException(
-          WeComPackageIssueCode.existingPackageCorrupt,
-          'Existing package file does not match its dataset ID',
-          fileName: input.contract.fileName,
+          WeComPackageIssueCode.emptyDatabaseNotAllowed,
+          'Database file is empty',
+          fileName: databaseContract.fileName,
         );
       }
-      if (input.sizeBytes > 0) {
-        await _validateDatabase(file, input.contract);
-      } else if (input.contract.tables.isNotEmpty ||
-          input.contract.indexes.isNotEmpty) {
+      final file = File(p.join(directory.path, databaseContract.fileName));
+      if (!await file.exists() ||
+          await file.length() != size ||
+          await _hashFile(file) != hash) {
+        throw WeComPackageException(
+          WeComPackageIssueCode.existingPackageCorrupt,
+          'Existing package file does not match its manifest',
+          fileName: databaseContract.fileName,
+        );
+      }
+      if (size > 0) {
+        await _validateDatabase(file, databaseContract);
+      } else if (databaseContract.tables.isNotEmpty ||
+          databaseContract.indexes.isNotEmpty) {
         throw WeComPackageException(
           WeComPackageIssueCode.schemaMismatch,
           'Empty placeholder has a non-empty schema contract',
-          fileName: input.contract.fileName,
+          fileName: databaseContract.fileName,
         );
       }
-
-      files[input.contract.fileName] = WeComPackageFile(
-        fileName: input.contract.fileName,
-        sha256: input.sha256,
-        sizeBytes: input.sizeBytes,
-        tableCount: input.contract.tables.length,
-        indexCount: input.contract.indexes.length,
-        isEmptyPlaceholder: input.sizeBytes == 0,
+      files[databaseContract.fileName] = WeComPackageFile(
+        fileName: databaseContract.fileName,
+        sha256: hash,
+        sizeBytes: size,
+        tableCount: databaseContract.tables.length,
+        indexCount: databaseContract.indexes.length,
+        isEmptyPlaceholder: size == 0,
       );
     }
 
+    if (_datasetIdFromFiles(files.values) != datasetId) {
+      throw const WeComPackageException(
+        WeComPackageIssueCode.existingPackageCorrupt,
+        'Existing package files do not match the dataset ID',
+      );
+    }
     return WeComImportedPackage._(
       datasetId: datasetId,
       directory: directory,
@@ -1270,19 +1336,30 @@ class WeComDatabasePackageImporter {
   }
 
   String _datasetId(List<_PreparedInput> inputs) {
-    final sorted = inputs.toList()
-      ..sort(
-        (left, right) =>
-            left.contract.fileName.compareTo(right.contract.fileName),
-      );
+    final files = inputs.map(
+      (input) => WeComPackageFile(
+        fileName: input.contract.fileName,
+        sha256: input.sha256,
+        sizeBytes: input.sizeBytes,
+        tableCount: input.contract.tables.length,
+        indexCount: input.contract.indexes.length,
+        isEmptyPlaceholder: input.sizeBytes == 0,
+      ),
+    );
+    return _datasetIdFromFiles(files);
+  }
+
+  String _datasetIdFromFiles(Iterable<WeComPackageFile> files) {
+    final sorted = files.toList()
+      ..sort((left, right) => left.fileName.compareTo(right.fileName));
     final material = StringBuffer('wecom-package-v1\n');
-    for (final input in sorted) {
+    for (final file in sorted) {
       material
-        ..write(input.contract.fileName)
+        ..write(file.fileName)
         ..write('\u0000')
-        ..write(input.sizeBytes)
+        ..write(file.sizeBytes)
         ..write('\u0000')
-        ..write(input.sha256)
+        ..write(file.sha256)
         ..write('\n');
     }
     return sha256.convert(utf8.encode(material.toString())).toString();
