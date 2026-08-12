@@ -1,21 +1,55 @@
 import 'package:sqflite/sqflite.dart';
 
 abstract final class WeComOverlaySchema {
-  static const version = 1;
+  static const version = 2;
 
   static const operationsTable = 'overlay_operations';
+  static const mergeAttemptsTable = 'overlay_merge_attempts';
+  static const mergeConflictsTable = 'overlay_merge_conflicts';
+  static const datasetActivationsTable = 'overlay_dataset_activations';
+
   static const targetIndex = 'idx_overlay_operations_target';
+  static const mergeIdentityIndex = 'idx_overlay_merge_attempts_identity';
+  static const conflictAttemptIndex = 'idx_overlay_merge_conflicts_attempt';
+
   static const noUpdateTrigger = 'trg_overlay_operations_no_update';
   static const noDeleteTrigger = 'trg_overlay_operations_no_delete';
+  static const mergeAttemptNoUpdateTrigger =
+      'trg_overlay_merge_attempts_no_update';
+  static const mergeAttemptNoDeleteTrigger =
+      'trg_overlay_merge_attempts_no_delete';
+  static const mergeConflictNoUpdateTrigger =
+      'trg_overlay_merge_conflicts_no_update';
+  static const mergeConflictNoDeleteTrigger =
+      'trg_overlay_merge_conflicts_no_delete';
+  static const activationNoUpdateTrigger =
+      'trg_overlay_dataset_activations_no_update';
+  static const activationNoDeleteTrigger =
+      'trg_overlay_dataset_activations_no_delete';
 
-  static const expectedTables = <String>[operationsTable];
-  static const expectedIndexes = <String>[targetIndex];
+  static const expectedTables = <String>[
+    datasetActivationsTable,
+    mergeAttemptsTable,
+    mergeConflictsTable,
+    operationsTable,
+  ];
+  static const expectedIndexes = <String>[
+    mergeIdentityIndex,
+    conflictAttemptIndex,
+    targetIndex,
+  ];
   static const expectedTriggers = <String>[
+    activationNoDeleteTrigger,
+    activationNoUpdateTrigger,
+    mergeAttemptNoDeleteTrigger,
+    mergeAttemptNoUpdateTrigger,
+    mergeConflictNoDeleteTrigger,
+    mergeConflictNoUpdateTrigger,
     noDeleteTrigger,
     noUpdateTrigger,
   ];
 
-  static const createStatements = <String>[
+  static const version1CreateStatements = <String>[
     '''
 CREATE TABLE overlay_operations (
   revision_id INTEGER PRIMARY KEY,
@@ -75,9 +109,202 @@ END
 ''',
   ];
 
-  static Future<void> createCurrent(Database db) async {
+  static const version2CreateStatements = <String>[
+    '''
+CREATE TABLE overlay_merge_attempts (
+  merge_id INTEGER PRIMARY KEY,
+  old_dataset_id TEXT NOT NULL
+    CHECK (
+      length(old_dataset_id) = 64 AND
+      old_dataset_id NOT GLOB '*[^0-9a-f]*'
+    ),
+  new_dataset_id TEXT NOT NULL
+    CHECK (
+      length(new_dataset_id) = 64 AND
+      new_dataset_id NOT GLOB '*[^0-9a-f]*'
+    ),
+  source_revision_count INTEGER NOT NULL
+    CHECK (source_revision_count >= 0),
+  status TEXT NOT NULL CHECK (status IN ('applied', 'conflicted')),
+  first_applied_revision_id INTEGER
+    REFERENCES overlay_operations(revision_id) ON DELETE RESTRICT,
+  last_applied_revision_id INTEGER
+    REFERENCES overlay_operations(revision_id) ON DELETE RESTRICT,
+  conflict_count INTEGER NOT NULL CHECK (conflict_count >= 0),
+  created_at_micros INTEGER NOT NULL CHECK (created_at_micros > 0),
+  CHECK (old_dataset_id <> new_dataset_id),
+  CHECK (
+    (status = 'applied' AND conflict_count = 0) OR
+    (status = 'conflicted' AND conflict_count > 0)
+  ),
+  CHECK (
+    (
+      first_applied_revision_id IS NULL AND
+      last_applied_revision_id IS NULL
+    ) OR (
+      first_applied_revision_id IS NOT NULL AND
+      last_applied_revision_id IS NOT NULL AND
+      first_applied_revision_id <= last_applied_revision_id
+    )
+  ),
+  CHECK (
+    status = 'applied' OR (
+      first_applied_revision_id IS NULL AND
+      last_applied_revision_id IS NULL
+    )
+  )
+)
+''',
+    '''
+CREATE UNIQUE INDEX idx_overlay_merge_attempts_identity
+ON overlay_merge_attempts (
+  old_dataset_id,
+  new_dataset_id,
+  source_revision_count
+)
+''',
+    '''
+CREATE TABLE overlay_merge_conflicts (
+  conflict_id INTEGER PRIMARY KEY,
+  merge_id INTEGER NOT NULL
+    REFERENCES overlay_merge_attempts(merge_id) ON DELETE RESTRICT,
+  database_name TEXT NOT NULL CHECK (length(database_name) > 0),
+  table_name TEXT NOT NULL CHECK (length(table_name) > 0),
+  row_key_json TEXT NOT NULL CHECK (length(row_key_json) > 0),
+  kind TEXT NOT NULL CHECK (
+    kind IN (
+      'baseFingerprintMismatch',
+      'concurrentInsert',
+      'remoteDelete',
+      'localDeleteRemoteUpdate',
+      'localReplaceRemoteUpdate',
+      'fieldUpdate'
+    )
+  ),
+  source_revision_ids_json TEXT NOT NULL
+    CHECK (length(source_revision_ids_json) > 0),
+  conflicting_columns_json TEXT NOT NULL
+    CHECK (length(conflicting_columns_json) > 0),
+  old_base_row_sha256 TEXT NOT NULL
+    CHECK (
+      length(old_base_row_sha256) = 64 AND
+      old_base_row_sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+  new_base_row_sha256 TEXT NOT NULL
+    CHECK (
+      length(new_base_row_sha256) = 64 AND
+      new_base_row_sha256 NOT GLOB '*[^0-9a-f]*'
+    ),
+  created_at_micros INTEGER NOT NULL CHECK (created_at_micros > 0)
+)
+''',
+    '''
+CREATE INDEX idx_overlay_merge_conflicts_attempt
+ON overlay_merge_conflicts (merge_id, conflict_id)
+''',
+    '''
+CREATE TABLE overlay_dataset_activations (
+  activation_id INTEGER PRIMARY KEY,
+  previous_dataset_id TEXT
+    CHECK (
+      previous_dataset_id IS NULL OR (
+        length(previous_dataset_id) = 64 AND
+        previous_dataset_id NOT GLOB '*[^0-9a-f]*'
+      )
+    ),
+  dataset_id TEXT NOT NULL
+    CHECK (
+      length(dataset_id) = 64 AND
+      dataset_id NOT GLOB '*[^0-9a-f]*'
+    ),
+  merge_id INTEGER UNIQUE
+    REFERENCES overlay_merge_attempts(merge_id) ON DELETE RESTRICT,
+  created_at_micros INTEGER NOT NULL CHECK (created_at_micros > 0),
+  CHECK (
+    (previous_dataset_id IS NULL AND merge_id IS NULL) OR (
+      previous_dataset_id IS NOT NULL AND
+      merge_id IS NOT NULL AND
+      previous_dataset_id <> dataset_id
+    )
+  )
+)
+''',
+    '''
+CREATE TRIGGER trg_overlay_merge_attempts_no_update
+BEFORE UPDATE ON overlay_merge_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'overlay merge attempts are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_merge_attempts_no_delete
+BEFORE DELETE ON overlay_merge_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'overlay merge attempts are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_merge_conflicts_no_update
+BEFORE UPDATE ON overlay_merge_conflicts
+BEGIN
+  SELECT RAISE(ABORT, 'overlay merge conflicts are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_merge_conflicts_no_delete
+BEFORE DELETE ON overlay_merge_conflicts
+BEGIN
+  SELECT RAISE(ABORT, 'overlay merge conflicts are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_dataset_activations_no_update
+BEFORE UPDATE ON overlay_dataset_activations
+BEGIN
+  SELECT RAISE(ABORT, 'overlay dataset activations are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_dataset_activations_no_delete
+BEFORE DELETE ON overlay_dataset_activations
+BEGIN
+  SELECT RAISE(ABORT, 'overlay dataset activations are append-only');
+END
+''',
+  ];
+
+  static const createStatements = <String>[
+    ...version1CreateStatements,
+    ...version2CreateStatements,
+  ];
+
+  static Future<void> createCurrent(Database db) {
+    return _execute(db, createStatements);
+  }
+
+  static Future<void> createVersion1(Database db) {
+    return _execute(db, version1CreateStatements);
+  }
+
+  static Future<void> upgrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) {
+    if (oldVersion == 1 && newVersion == version) {
+      return _execute(db, version2CreateStatements);
+    }
+    throw StateError(
+      'Unsupported overlay schema upgrade: $oldVersion -> $newVersion',
+    );
+  }
+
+  static Future<void> _execute(
+    Database db,
+    List<String> statements,
+  ) async {
     final batch = db.batch();
-    for (final statement in createStatements) {
+    for (final statement in statements) {
       batch.execute(statement);
     }
     await batch.commit(noResult: true);

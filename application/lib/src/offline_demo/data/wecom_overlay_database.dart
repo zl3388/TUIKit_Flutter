@@ -28,6 +28,7 @@ class WeComOverlayDatabase {
         },
         onCreate: (database, version) =>
             WeComOverlaySchema.createCurrent(database),
+        onUpgrade: WeComOverlaySchema.upgrade,
       ),
     );
 

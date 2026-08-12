@@ -27,7 +27,7 @@ void main() {
     }
   });
 
-  test('creates only the approved technical operation log', () async {
+  test('creates only approved technical overlay metadata', () async {
     final database = await WeComOverlayDatabase.open(
       factory: databaseFactoryFfi,
       databasePath: databasePath,
@@ -56,6 +56,49 @@ void main() {
         'values_json',
         'base_row_sha256',
         'reverts_revision_id',
+        'created_at_micros',
+      ],
+    );
+    expect(
+      await _columnNames(database, WeComOverlaySchema.mergeAttemptsTable),
+      [
+        'merge_id',
+        'old_dataset_id',
+        'new_dataset_id',
+        'source_revision_count',
+        'status',
+        'first_applied_revision_id',
+        'last_applied_revision_id',
+        'conflict_count',
+        'created_at_micros',
+      ],
+    );
+    expect(
+      await _columnNames(database, WeComOverlaySchema.mergeConflictsTable),
+      [
+        'conflict_id',
+        'merge_id',
+        'database_name',
+        'table_name',
+        'row_key_json',
+        'kind',
+        'source_revision_ids_json',
+        'conflicting_columns_json',
+        'old_base_row_sha256',
+        'new_base_row_sha256',
+        'created_at_micros',
+      ],
+    );
+    expect(
+      await _columnNames(
+        database,
+        WeComOverlaySchema.datasetActivationsTable,
+      ),
+      [
+        'activation_id',
+        'previous_dataset_id',
+        'dataset_id',
+        'merge_id',
         'created_at_micros',
       ],
     );
@@ -165,6 +208,48 @@ void main() {
     );
   });
 
+  test('upgrades version 1 without changing operation history', () async {
+    final rawDatabase = await databaseFactoryFfi.openDatabase(
+      databasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        singleInstance: false,
+        onCreate: (database, version) =>
+            WeComOverlaySchema.createVersion1(database),
+      ),
+    );
+    await rawDatabase.insert(
+      WeComOverlaySchema.operationsTable,
+      {
+        'dataset_id': datasetId,
+        'database_name': 'message.db',
+        'table_name': 'message_table',
+        'row_key_json': '{"id":1}',
+        'operation': 'upsert',
+        'values_json': '{"content":"legacy"}',
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+    await rawDatabase.close();
+
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+
+    expect(await database.connection.getVersion(), WeComOverlaySchema.version);
+    expect(await _schemaObjectNames(database, 'table'),
+        WeComOverlaySchema.expectedTables);
+    expect(
+      await database.connection.query(WeComOverlaySchema.operationsTable),
+      hasLength(1),
+    );
+    expect(
+      await database.connection.query(WeComOverlaySchema.mergeAttemptsTable),
+      isEmpty,
+    );
+  });
   test('reopening preserves the append-only revision history', () async {
     var database = await WeComOverlayDatabase.open(
       factory: databaseFactoryFfi,
@@ -189,6 +274,16 @@ void main() {
       hasLength(1),
     );
   });
+}
+
+Future<List<String>> _columnNames(
+  WeComOverlayDatabase database,
+  String tableName,
+) async {
+  final rows = await database.connection.rawQuery(
+    'PRAGMA table_info($tableName)',
+  );
+  return rows.map((row) => row['name']! as String).toList(growable: false);
 }
 
 Future<List<String>> _schemaObjectNames(
