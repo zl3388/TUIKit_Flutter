@@ -36,6 +36,18 @@ class WeComMergedDirectoryRepository {
       throw RangeError.value(offset, 'offset', 'Must not be negative');
     }
 
+    final contacts = await listAllInternalContacts();
+    if (offset >= contacts.length) {
+      return const [];
+    }
+    final requestedEnd = offset + limit;
+    final end = requestedEnd < contacts.length ? requestedEnd : contacts.length;
+    return List<WeComInternalContact>.unmodifiable(
+      contacts.sublist(offset, end),
+    );
+  }
+
+  Future<List<WeComInternalContact>> listAllInternalContacts() async {
     final baseContacts = await _readAllBaseContacts();
     final baseById = <int, WeComInternalContact>{
       for (final contact in baseContacts) contact.id: contact,
@@ -87,14 +99,7 @@ class WeComMergedDirectoryRepository {
         .map((state) => state.toContact())
         .toList(growable: false)
       ..sort((left, right) => left.id.compareTo(right.id));
-    if (offset >= contacts.length) {
-      return const [];
-    }
-    final requestedEnd = offset + limit;
-    final end = requestedEnd < contacts.length ? requestedEnd : contacts.length;
-    return List<WeComInternalContact>.unmodifiable(
-      contacts.sublist(offset, end),
-    );
+    return List<WeComInternalContact>.unmodifiable(contacts);
   }
 
   Future<List<WeComInternalContact>> _readAllBaseContacts() async {

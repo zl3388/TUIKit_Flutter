@@ -39,7 +39,7 @@ class _OfflineDemoAppState extends State<OfflineDemoApp> {
   void dispose() {
     final environment = _resolvedEnvironment;
     if (environment != null) {
-      unawaited(environment.database.close());
+      unawaited(environment.close());
     }
     super.dispose();
   }

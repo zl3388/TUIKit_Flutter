@@ -52,27 +52,28 @@ class OrgUnit {
       );
 }
 
-class OfflineContact {
-  const OfflineContact({
+class DirectoryContact {
+  const DirectoryContact({
     required this.id,
-    required this.profile,
-    required this.orgUnitName,
-    required this.isFavorite,
-    this.alias,
+    required this.displayName,
+    this.account,
+    this.organizationName,
+    this.jobTitle,
   });
 
   final String id;
-  final OfflineProfile profile;
-  final String orgUnitName;
-  final bool isFavorite;
-  final String? alias;
+  final String displayName;
+  final String? account;
+  final String? organizationName;
+  final String? jobTitle;
 
-  factory OfflineContact.fromRow(Map<String, Object?> row) => OfflineContact(
+  factory DirectoryContact.fromRow(Map<String, Object?> row) =>
+      DirectoryContact(
         id: row['contact_id']! as String,
-        profile: OfflineProfile.fromRow(row),
-        orgUnitName: row['org_unit_name']! as String,
-        isFavorite: row['is_favorite'] == 1,
-        alias: row['alias'] as String?,
+        displayName: row['display_name']! as String,
+        account: row['account'] as String?,
+        organizationName: row['organization_name'] as String?,
+        jobTitle: row['job_title'] as String?,
       );
 }
 

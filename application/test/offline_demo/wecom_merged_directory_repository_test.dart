@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:application/src/offline_demo/data/wecom_contact_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_directory_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_directory_repository.dart';
@@ -150,6 +151,18 @@ void main() {
     expect(contacts[1].displayName, 'Restored');
     expect(contacts[2].displayName, 'Overlay only');
     expect(contacts[2].externalCorporationName, 'Overlay corp');
+    final allContacts = await repository.listAllInternalContacts();
+    expect(allContacts.map((contact) => contact.id), [1, 2, 4]);
+    expect(
+      allContacts.map((contact) => contact.displayName),
+      ['Base real', 'Restored', 'Overlay only'],
+    );
+
+    final viewContacts =
+        await WeComContactRepository(repository).listContacts();
+    expect(viewContacts.map((contact) => contact.id), ['1', '2', '4']);
+    expect(viewContacts[2].organizationName, 'Overlay corp');
+    expect(viewContacts[2].account, isNull);
 
     final page = await repository.listInternalContacts(limit: 2, offset: 1);
     expect(page.map((contact) => contact.id), [2, 4]);

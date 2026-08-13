@@ -9,13 +9,15 @@ class OfflineDemoStore extends ChangeNotifier {
   final OfflineRepositoryBundle repositories;
 
   OfflineProfile? profile;
-  List<OfflineContact> contacts = const [];
+  List<DirectoryContact> contacts = const [];
   List<OfflineConversation> conversations = const [];
   List<OfflineNotification> notifications = const [];
   List<OfflineAnnouncement> announcements = const [];
   List<OfflineCallRecord> callRecords = const [];
   String scenarioName = '';
   bool isLoading = false;
+
+  bool get contactsAvailable => repositories.contacts.isAvailable;
 
   int get unreadConversationCount => conversations.fold(
         0,
@@ -39,7 +41,7 @@ class OfflineDemoStore extends ChangeNotifier {
         repositories.settings.read('scenario_name'),
       ]);
       profile = results[0] as OfflineProfile;
-      contacts = results[1] as List<OfflineContact>;
+      contacts = results[1] as List<DirectoryContact>;
       conversations = results[2] as List<OfflineConversation>;
       notifications = results[3] as List<OfflineNotification>;
       announcements = results[4] as List<OfflineAnnouncement>;
@@ -49,6 +51,11 @@ class OfflineDemoStore extends ChangeNotifier {
       isLoading = false;
       notifyListeners();
     }
+  }
+
+  Future<void> refreshContacts() async {
+    contacts = await repositories.contacts.listContacts();
+    notifyListeners();
   }
 
   Future<List<OfflineMessage>> messagesFor(String conversationId) {

@@ -35,7 +35,11 @@ class _OfflineHomeState extends State<OfflineHome> {
       builder: (context, _) {
         final pages = <Widget>[
           ConversationsPage(store: store),
-          ContactsPage(store: store),
+          ContactsPage(
+            contactsAvailable: store.contactsAvailable,
+            contacts: store.contacts,
+            onRefresh: store.refreshContacts,
+          ),
           WorkbenchPage(environment: widget.environment),
           ProfilePage(environment: widget.environment),
         ];

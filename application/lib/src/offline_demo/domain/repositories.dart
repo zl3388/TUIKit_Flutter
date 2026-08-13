@@ -8,7 +8,9 @@ abstract interface class IdentityRepository {
 }
 
 abstract interface class ContactRepository {
-  Future<List<OfflineContact>> listContacts();
+  bool get isAvailable;
+
+  Future<List<DirectoryContact>> listContacts();
 }
 
 abstract interface class ConversationRepository {
@@ -51,9 +53,12 @@ abstract interface class SettingsRepository {
 }
 
 class OfflineRepositoryBundle {
-  OfflineRepositoryBundle(OfflineDatabase database)
-      : identity = SqliteIdentityRepository(database.connection),
-        contacts = SqliteContactRepository(database.connection),
+  OfflineRepositoryBundle(
+    OfflineDatabase database, {
+    ContactRepository? contactRepository,
+  })  : identity = SqliteIdentityRepository(database.connection),
+        contacts =
+            contactRepository ?? SqliteContactRepository(database.connection),
         conversations = SqliteConversationRepository(database.connection),
         activity = SqliteActivityRepository(database.connection),
         settings = SqliteSettingsRepository(database.connection);
@@ -92,24 +97,37 @@ class SqliteContactRepository implements ContactRepository {
   final Database _db;
 
   @override
-  Future<List<OfflineContact>> listContacts() async {
+  bool get isAvailable => true;
+
+  @override
+  Future<List<DirectoryContact>> listContacts() async {
     final rows = await _db.rawQuery('''
 SELECT
   c.id AS contact_id,
-  c.alias,
-  c.is_favorite,
-  p.*,
-  ou.name AS org_unit_name
+  p.display_name,
+  NULL AS account,
+  ou.name AS organization_name,
+  p.title AS job_title
 FROM contacts c
 JOIN profiles p ON p.id = c.profile_id
 JOIN org_units ou ON ou.id = c.org_unit_id
 WHERE p.id != (
   SELECT value FROM settings WHERE key = 'current_profile_id' LIMIT 1
 )
-ORDER BY c.is_favorite DESC, ou.sort_order ASC, p.display_name COLLATE NOCASE ASC
+ORDER BY ou.sort_order ASC, p.display_name COLLATE NOCASE ASC
 ''');
-    return rows.map(OfflineContact.fromRow).toList(growable: false);
+    return rows.map(DirectoryContact.fromRow).toList(growable: false);
   }
+}
+
+class UnavailableContactRepository implements ContactRepository {
+  const UnavailableContactRepository();
+
+  @override
+  bool get isAvailable => false;
+
+  @override
+  Future<List<DirectoryContact>> listContacts() async => const [];
 }
 
 class SqliteConversationRepository implements ConversationRepository {
