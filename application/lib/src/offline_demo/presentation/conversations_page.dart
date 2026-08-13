@@ -40,7 +40,7 @@ class _ConversationsPageState extends State<ConversationsPage> {
         MaterialPageRoute<void>(
           builder: (context) => ConversationPage(
             conversation: current,
-            currentProfileId: widget.store.profile!.id,
+            currentProfileId: widget.store.profile?.id,
             store: widget.store,
           ),
         ),
@@ -111,7 +111,7 @@ class _ConversationsPageState extends State<ConversationsPage> {
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
-    final profile = store.profile!;
+    final profile = store.profile;
     final query = _query.trim().toLowerCase();
     final conversations = query.isEmpty
         ? store.conversations
@@ -122,11 +122,14 @@ class _ConversationsPageState extends State<ConversationsPage> {
 
     return Column(
       children: [
-        _WorkspaceSummary(
-          profile: profile,
-          unreadConversations: store.unreadConversationCount,
-          unreadNotifications: store.unreadNotificationCount,
-        ),
+        if (profile != null)
+          _WorkspaceSummary(
+            profile: profile,
+            unreadConversations: store.unreadConversationCount,
+            unreadNotifications: store.unreadNotificationCount,
+          )
+        else
+          const _IdentityRequiredSummary(),
         Container(
           color: Colors.white,
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -176,6 +179,26 @@ class _ConversationsPageState extends State<ConversationsPage> {
   }
 }
 
+class _IdentityRequiredSummary extends StatelessWidget {
+  const _IdentityRequiredSummary();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: Colors.white,
+      padding: const EdgeInsets.all(16),
+      child: const Row(
+        children: [
+          Icon(Icons.badge_outlined, color: Color(0xFF64727A)),
+          SizedBox(width: 12),
+          Expanded(child: Text('未选择企业身份')),
+        ],
+      ),
+    );
+  }
+}
+
 class _EmptyConversationSearch extends StatelessWidget {
   const _EmptyConversationSearch();
 
@@ -216,6 +239,11 @@ class _WorkspaceSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final organization = [
+      profile.corporationName,
+      profile.department,
+      profile.title,
+    ].whereType<String>().where((value) => value.isNotEmpty).join(' · ');
     return Container(
       width: double.infinity,
       color: Colors.white,
@@ -236,15 +264,17 @@ class _WorkspaceSummary extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                       ),
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  '${profile.department} · ${profile.title}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF64727A),
-                      ),
-                ),
+                if (organization.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    organization,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF64727A),
+                        ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -460,7 +490,7 @@ class ConversationPage extends StatefulWidget {
   });
 
   final OfflineConversation conversation;
-  final String currentProfileId;
+  final String? currentProfileId;
   final OfflineDemoStore store;
 
   @override
@@ -483,7 +513,8 @@ class _ConversationPageState extends State<ConversationPage> {
     _composerController = TextEditingController(
       text: widget.conversation.draftText,
     )..addListener(_handleComposerChanged);
-    _canSend = widget.conversation.draftText.trim().isNotEmpty;
+    _canSend = widget.currentProfileId != null &&
+        widget.conversation.draftText.trim().isNotEmpty;
     _loadMessages(scrollToEnd: true);
   }
 
@@ -499,7 +530,8 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 
   void _handleComposerChanged() {
-    final canSend = _composerController.text.trim().isNotEmpty;
+    final canSend = widget.currentProfileId != null &&
+        _composerController.text.trim().isNotEmpty;
     if (canSend != _canSend) {
       setState(() => _canSend = canSend);
     }
@@ -658,11 +690,17 @@ class _ConversationPageState extends State<ConversationPage> {
                 minLines: 1,
                 maxLines: 4,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _sendMessage(),
-                decoration: const InputDecoration(
-                  hintText: '输入消息',
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                enabled: widget.currentProfileId != null,
+                onSubmitted: widget.currentProfileId == null
+                    ? null
+                    : (_) => _sendMessage(),
+                decoration: InputDecoration(
+                  hintText:
+                      widget.currentProfileId == null ? '选择企业身份后可发送消息' : '输入消息',
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 11,
+                  ),
                 ),
               ),
             ),

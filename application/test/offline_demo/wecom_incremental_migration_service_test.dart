@@ -3,12 +3,15 @@ import 'dart:io';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_incremental_merge_planner.dart';
 import 'package:application/src/offline_demo/data/wecom_incremental_migration_service.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'wecom_identity_test_fixture.dart';
 
 void main() {
   late Directory temporaryDirectory;
@@ -42,6 +45,7 @@ void main() {
         contract: contract,
         databaseFactory: databaseFactoryFfi,
       ),
+      identityResolver: WeComIdentityResolver(databaseFactoryFfi),
     );
   });
 
@@ -50,6 +54,36 @@ void main() {
     if (await temporaryDirectory.exists()) {
       await temporaryDirectory.delete(recursive: true);
     }
+  });
+
+  test('does not activate a migration source without an identity', () async {
+    final packages = await _importPackages(
+      temporaryDirectory,
+      importer,
+      oldRows: [_user(1, name: 'Alice')],
+      newRows: [_user(1, name: 'Alice', account: 'remote')],
+    );
+
+    await expectLater(
+      migrations.migrate(
+        oldBasePackage: packages.oldPackage,
+        newBasePackage: packages.newPackage,
+      ),
+      throwsA(
+        isA<WeComIncrementalMigrationException>().having(
+          (error) => error.code,
+          'code',
+          WeComIncrementalMigrationIssueCode.activeIdentityRequired,
+        ),
+      ),
+    );
+    expect(
+      await _count(
+        overlayDatabase,
+        WeComOverlaySchema.datasetActivationsTable,
+      ),
+      0,
+    );
   });
 
   test('persists conflicts without target revisions or business values',
@@ -67,6 +101,7 @@ void main() {
       rowKey: const {'id': 1},
       values: const {'name': 'Alicia'},
     );
+    await _activate(overlayDatabase, packages.oldPackage.datasetId);
 
     final result = await migrations.migrate(
       oldBasePackage: packages.oldPackage,
@@ -154,6 +189,7 @@ void main() {
       rowKey: const {'id': 1},
       values: const {'name': 'Alicia'},
     );
+    await _activate(overlayDatabase, packages.oldPackage.datasetId);
 
     final result = await migrations.migrate(
       oldBasePackage: packages.oldPackage,
@@ -214,6 +250,7 @@ void main() {
       rowKey: const {'id': 1},
       values: const {'name': 'Alicia'},
     );
+    await _activate(overlayDatabase, packages.oldPackage.datasetId);
     final first = await migrations.migrate(
       oldBasePackage: packages.oldPackage,
       newBasePackage: packages.newPackage,
@@ -256,6 +293,8 @@ void main() {
         'previous_dataset_id': packages.newPackage.datasetId,
         'dataset_id': laterDataset,
         'merge_id': laterMergeId,
+        'current_corp_id': 100,
+        'current_user_id': 1,
         'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
       },
     );
@@ -297,6 +336,7 @@ void main() {
       rowKey: const {'id': 1},
       values: const {'name': 'Independent target edit'},
     );
+    await _activate(overlayDatabase, packages.oldPackage.datasetId);
 
     await expectLater(
       migrations.migrate(
@@ -312,13 +352,16 @@ void main() {
       ),
     );
 
-    expect(await migrations.currentActiveDatasetId(), isNull);
+    expect(
+      await migrations.currentActiveDatasetId(),
+      packages.oldPackage.datasetId,
+    );
     expect(await _count(overlayDatabase, WeComOverlaySchema.mergeAttemptsTable),
         0);
     expect(
         await _count(
             overlayDatabase, WeComOverlaySchema.datasetActivationsTable),
-        0);
+        1);
     expect(await _operationsFor(overlayDatabase, packages.newPackage.datasetId),
         hasLength(1));
   });
@@ -345,6 +388,8 @@ void main() {
         'previous_dataset_id': null,
         'dataset_id': otherDataset,
         'merge_id': null,
+        'current_corp_id': 100,
+        'current_user_id': 1,
         'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
       },
     );
@@ -388,6 +433,7 @@ void main() {
       rowKey: const {'id': 1},
       values: const {'name': 'Alicia'},
     );
+    await _activate(overlayDatabase, packages.oldPackage.datasetId);
     await overlayDatabase.connection.execute(
       'CREATE TRIGGER fail_applied_merge '
       'BEFORE INSERT ON ${WeComOverlaySchema.mergeAttemptsTable} '
@@ -403,7 +449,10 @@ void main() {
       throwsA(isA<DatabaseException>()),
     );
 
-    expect(await migrations.currentActiveDatasetId(), isNull);
+    expect(
+      await migrations.currentActiveDatasetId(),
+      packages.oldPackage.datasetId,
+    );
     expect(await _operationsFor(overlayDatabase, packages.newPackage.datasetId),
         isEmpty);
     expect(await _count(overlayDatabase, WeComOverlaySchema.mergeAttemptsTable),
@@ -411,7 +460,7 @@ void main() {
     expect(
         await _count(
             overlayDatabase, WeComOverlaySchema.datasetActivationsTable),
-        0);
+        1);
   });
 }
 
@@ -469,6 +518,23 @@ Future<int> _count(
   return rows.single['count']! as int;
 }
 
+Future<void> _activate(
+  WeComOverlayDatabase overlayDatabase,
+  String datasetId,
+) async {
+  await overlayDatabase.connection.insert(
+    WeComOverlaySchema.datasetActivationsTable,
+    {
+      'previous_dataset_id': null,
+      'dataset_id': datasetId,
+      'merge_id': null,
+      'current_corp_id': 100,
+      'current_user_id': 1,
+      'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+    },
+  );
+}
+
 Future<_ImportedPackages> _importPackages(
   Directory root,
   WeComDatabasePackageImporter importer, {
@@ -496,22 +562,23 @@ Future<void> _createSource(
   Directory source,
   List<Map<String, Object?>> rows,
 ) async {
+  final current = rows.single;
+  await createIdentityDatabases(
+    source,
+    contactName: current['name']! as String,
+    account: current['account']! as String,
+  );
   final database = await databaseFactoryFfi.openDatabase(
     p.join(source.path, 'user.db'),
     options: OpenDatabaseOptions(singleInstance: false),
   );
-  await database.execute(
-    'CREATE TABLE user_table ('
-    'id INTEGER NOT NULL PRIMARY KEY, '
-    "real_name TEXT NOT NULL DEFAULT '', "
-    "name TEXT NOT NULL DEFAULT '', "
-    "account TEXT NOT NULL DEFAULT '', "
-    "external_corp_name TEXT NOT NULL DEFAULT '', "
-    "external_job TEXT NOT NULL DEFAULT ''"
-    ')',
-  );
   for (final row in rows) {
-    await database.insert('user_table', row);
+    await database.update(
+      'user_table',
+      row,
+      where: 'id = ?',
+      whereArgs: [row['id']],
+    );
   }
   await database.close();
 }
@@ -532,37 +599,7 @@ WeComPackageContract _contract() {
   return WeComPackageContract(
     formatVersion: 1,
     scope: 'incremental migration test',
-    databases: [
-      WeComDatabaseContract(
-        fileName: 'user.db',
-        allowEmpty: false,
-        tables: {
-          'user_table': [
-            _column('id', 'INTEGER', notNull: true, primaryKeyPosition: 1),
-            _column('real_name', 'TEXT', notNull: true),
-            _column('name', 'TEXT', notNull: true),
-            _column('account', 'TEXT', notNull: true),
-            _column('external_corp_name', 'TEXT', notNull: true),
-            _column('external_job', 'TEXT', notNull: true),
-          ],
-        },
-        indexes: const {},
-      ),
-    ],
-  );
-}
-
-WeComColumnContract _column(
-  String name,
-  String type, {
-  bool notNull = false,
-  int primaryKeyPosition = 0,
-}) {
-  return WeComColumnContract(
-    name: name,
-    type: type,
-    notNull: notNull,
-    primaryKeyPosition: primaryKeyPosition,
+    databases: identityDatabaseContracts(),
   );
 }
 

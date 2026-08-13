@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 
 import 'wecom_database_package.dart';
+import 'wecom_identity_repository.dart';
 import 'wecom_incremental_merge_planner.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
@@ -16,6 +17,7 @@ enum WeComIncrementalMigrationIssueCode {
   sourceOverlayChanged,
   targetOverlayNotEmpty,
   activeDatasetMismatch,
+  activeIdentityRequired,
   invalidPersistedState,
 }
 
@@ -94,23 +96,50 @@ class WeComIncrementalMigrationService {
   WeComIncrementalMigrationService({
     required WeComOverlayDatabase overlayDatabase,
     required WeComIncrementalMergePlanner planner,
+    required WeComIdentityResolver identityResolver,
   })  : _overlayDatabase = overlayDatabase,
-        _planner = planner;
+        _planner = planner,
+        _identityResolver = identityResolver;
 
   final WeComOverlayDatabase _overlayDatabase;
   final WeComIncrementalMergePlanner _planner;
+  final WeComIdentityResolver _identityResolver;
 
   Future<WeComIncrementalMigrationResult> migrate({
     required WeComImportedPackage oldBasePackage,
     required WeComImportedPackage newBasePackage,
   }) async {
+    final activeIdentity = await _readActiveActivation(
+      _overlayDatabase.connection,
+    );
+    if (activeIdentity?.corporationId == null ||
+        activeIdentity?.userId == null) {
+      throw const WeComIncrementalMigrationException(
+        WeComIncrementalMigrationIssueCode.activeIdentityRequired,
+        'Incremental migration requires an active dataset identity',
+      );
+    }
+    final identity = WeComDatasetIdentity(
+      corporationId: activeIdentity!.corporationId!,
+      userId: activeIdentity.userId!,
+      corporationShortName: '',
+      corporationFullName: '',
+    );
+    await _identityResolver.validate(
+      package: oldBasePackage,
+      identity: identity,
+    );
+    await _identityResolver.validate(
+      package: newBasePackage,
+      identity: identity,
+    );
     final plan = await _planner.plan(
       oldBasePackage: oldBasePackage,
       newBasePackage: newBasePackage,
       overlayDatabase: _overlayDatabase,
     );
     return _overlayDatabase.connection.transaction(
-      (transaction) => _persistPlan(transaction, plan),
+      (transaction) => _persistPlan(transaction, plan, identity),
     );
   }
 
@@ -144,6 +173,7 @@ class WeComIncrementalMigrationService {
   Future<WeComIncrementalMigrationResult> _persistPlan(
     Transaction transaction,
     WeComIncrementalMergePlan plan,
+    WeComDatasetIdentity validatedIdentity,
   ) async {
     final sourceRevisionCount = await _operationCount(
       transaction,
@@ -156,7 +186,22 @@ class WeComIncrementalMigrationService {
       );
     }
 
-    final activeDatasetId = await _readActiveDataset(transaction);
+    final activeActivation = await _readActiveActivation(transaction);
+    final activeDatasetId = activeActivation?.datasetId;
+    if (activeActivation?.corporationId == null ||
+        activeActivation?.userId == null) {
+      throw const WeComIncrementalMigrationException(
+        WeComIncrementalMigrationIssueCode.activeIdentityRequired,
+        'Incremental migration requires an active dataset identity',
+      );
+    }
+    if (activeActivation!.corporationId != validatedIdentity.corporationId ||
+        activeActivation.userId != validatedIdentity.userId) {
+      throw const WeComIncrementalMigrationException(
+        WeComIncrementalMigrationIssueCode.activeDatasetMismatch,
+        'Active dataset identity changed during incremental migration',
+      );
+    }
     final existing = await transaction.query(
       WeComOverlaySchema.mergeAttemptsTable,
       where: 'old_dataset_id = ? AND new_dataset_id = ? '
@@ -191,17 +236,6 @@ class WeComIncrementalMigrationService {
     }
 
     final createdAtMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
-    if (activeDatasetId == null) {
-      await transaction.insert(
-        WeComOverlaySchema.datasetActivationsTable,
-        {
-          'previous_dataset_id': null,
-          'dataset_id': plan.oldDatasetId,
-          'merge_id': null,
-          'created_at_micros': createdAtMicros,
-        },
-      );
-    }
 
     if (!plan.canApply) {
       final mergeId = await _insertAttempt(
@@ -278,6 +312,8 @@ class WeComIncrementalMigrationService {
         'previous_dataset_id': plan.oldDatasetId,
         'dataset_id': plan.newDatasetId,
         'merge_id': mergeId,
+        'current_corp_id': activeActivation.corporationId,
+        'current_user_id': activeActivation.userId,
         'created_at_micros': createdAtMicros,
       },
     );
@@ -414,9 +450,15 @@ class WeComIncrementalMigrationService {
   }
 
   Future<String?> _readActiveDataset(DatabaseExecutor executor) async {
+    return (await _readActiveActivation(executor))?.datasetId;
+  }
+
+  Future<_ActiveDatasetMetadata?> _readActiveActivation(
+    DatabaseExecutor executor,
+  ) async {
     final rows = await executor.query(
       WeComOverlaySchema.datasetActivationsTable,
-      columns: ['dataset_id'],
+      columns: ['dataset_id', 'current_corp_id', 'current_user_id'],
       orderBy: 'activation_id DESC',
       limit: 1,
     );
@@ -424,13 +466,22 @@ class WeComIncrementalMigrationService {
       return null;
     }
     final datasetId = rows.single['dataset_id'];
-    if (datasetId is! String) {
+    final corporationId = rows.single['current_corp_id'];
+    final userId = rows.single['current_user_id'];
+    if (datasetId is! String ||
+        (corporationId != null && corporationId is! int) ||
+        (userId != null && userId is! int) ||
+        ((corporationId == null) != (userId == null))) {
       throw const WeComIncrementalMigrationException(
         WeComIncrementalMigrationIssueCode.invalidPersistedState,
         'Active dataset metadata is malformed',
       );
     }
-    return datasetId;
+    return _ActiveDatasetMetadata(
+      datasetId,
+      corporationId as int?,
+      userId as int?,
+    );
   }
 
   WeComPersistedMergeConflict _decodeConflict(
@@ -464,4 +515,16 @@ class WeComIncrementalMigrationService {
       createdAtMicros: row['created_at_micros']! as int,
     );
   }
+}
+
+class _ActiveDatasetMetadata {
+  const _ActiveDatasetMetadata(
+    this.datasetId,
+    this.corporationId,
+    this.userId,
+  );
+
+  final String datasetId;
+  final int? corporationId;
+  final int? userId;
 }

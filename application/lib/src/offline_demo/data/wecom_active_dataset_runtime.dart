@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'wecom_conversation_repository.dart';
 import 'wecom_database_package.dart';
 import 'wecom_directory_repository.dart';
+import 'wecom_identity_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
 import 'wecom_merged_directory_repository.dart';
 import 'wecom_overlay_database.dart';
@@ -15,6 +16,7 @@ enum WeComActiveDatasetIssueCode {
   activeDatasetMismatch,
   activeDatasetChanged,
   invalidActivation,
+  identityRequired,
 }
 
 class WeComActiveDatasetException implements Exception {
@@ -37,12 +39,14 @@ class WeComActiveDatasetRuntime {
     required this.package,
     required this.directory,
     required this.conversations,
+    required this.identity,
     required List<Database> connections,
   }) : _connections = connections;
 
   final WeComImportedPackage package;
   final WeComMergedDirectoryRepository directory;
   final WeComMergedConversationRepository conversations;
+  final WeComCurrentIdentityRepository identity;
   final List<Database> _connections;
 
   bool _closed = false;
@@ -76,11 +80,27 @@ class WeComActiveDatasetResolver {
   final DatabaseFactory _databaseFactory;
   final WeComOverlayDatabase _overlayDatabase;
 
-  Future<bool> ensureInitialDataset(String datasetId) async {
-    await _packageImporter.openImportedPackage(
+  Future<bool> ensureInitialDataset(
+    String datasetId, {
+    File? configFile,
+    int? selectedCorporationId,
+  }) async {
+    final package = await _packageImporter.openImportedPackage(
       destinationRoot: _destinationRoot,
       datasetId: datasetId,
     );
+    final resolution = await WeComIdentityResolver(_databaseFactory).resolve(
+      package: package,
+      configFile: configFile,
+      selectedCorporationId: selectedCorporationId,
+    );
+    final identity = resolution.selected;
+    if (identity == null) {
+      throw const WeComActiveDatasetException(
+        WeComActiveDatasetIssueCode.identityRequired,
+        'The imported dataset requires an explicit corporation selection',
+      );
+    }
     return _overlayDatabase.connection.transaction((transaction) async {
       final current = await _readLatestActivation(transaction);
       if (current == null) {
@@ -90,6 +110,8 @@ class WeComActiveDatasetResolver {
             'previous_dataset_id': null,
             'dataset_id': datasetId,
             'merge_id': null,
+            'current_corp_id': identity.corporationId,
+            'current_user_id': identity.userId,
             'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
           },
         );
@@ -101,7 +123,76 @@ class WeComActiveDatasetResolver {
           'A different dataset is already active',
         );
       }
+      if (current.corporationId == null || current.userId == null) {
+        await transaction.insert(
+          WeComOverlaySchema.datasetActivationsTable,
+          {
+            'previous_dataset_id': datasetId,
+            'dataset_id': datasetId,
+            'merge_id': null,
+            'current_corp_id': identity.corporationId,
+            'current_user_id': identity.userId,
+            'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+          },
+        );
+        return true;
+      }
       return false;
+    });
+  }
+
+  Future<WeComIdentityResolution> inspectIdentity(
+    String datasetId, {
+    File? configFile,
+    int? selectedCorporationId,
+  }) async {
+    final package = await _packageImporter.openImportedPackage(
+      destinationRoot: _destinationRoot,
+      datasetId: datasetId,
+    );
+    return WeComIdentityResolver(_databaseFactory).resolve(
+      package: package,
+      configFile: configFile,
+      selectedCorporationId: selectedCorporationId,
+    );
+  }
+
+  Future<void> selectCorporation({
+    required String datasetId,
+    required int corporationId,
+  }) async {
+    final package = await _packageImporter.openImportedPackage(
+      destinationRoot: _destinationRoot,
+      datasetId: datasetId,
+    );
+    final resolution = await WeComIdentityResolver(_databaseFactory).resolve(
+      package: package,
+      selectedCorporationId: corporationId,
+    );
+    final identity = resolution.selected!;
+    await _overlayDatabase.connection.transaction((transaction) async {
+      final current = await _readLatestActivation(transaction);
+      if (current == null || current.datasetId != datasetId) {
+        throw const WeComActiveDatasetException(
+          WeComActiveDatasetIssueCode.activeDatasetMismatch,
+          'Corporation selection does not target the active dataset',
+        );
+      }
+      if (current.corporationId == identity.corporationId &&
+          current.userId == identity.userId) {
+        return;
+      }
+      await transaction.insert(
+        WeComOverlaySchema.datasetActivationsTable,
+        {
+          'previous_dataset_id': datasetId,
+          'dataset_id': datasetId,
+          'merge_id': null,
+          'current_corp_id': identity.corporationId,
+          'current_user_id': identity.userId,
+          'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+        },
+      );
     });
   }
 
@@ -123,6 +214,25 @@ class WeComActiveDatasetResolver {
     Database? userDatabase;
     Database? sessionDatabase;
     try {
+      final corporationId = activation.corporationId;
+      final userId = activation.userId;
+      if (corporationId == null || userId == null) {
+        throw const WeComActiveDatasetException(
+          WeComActiveDatasetIssueCode.identityRequired,
+          'The active dataset does not have a selected corporation identity',
+        );
+      }
+      final resolution = await WeComIdentityResolver(_databaseFactory).resolve(
+        package: package,
+        selectedCorporationId: corporationId,
+      );
+      final identity = resolution.selected!;
+      if (identity.userId != userId) {
+        throw const WeComActiveDatasetException(
+          WeComActiveDatasetIssueCode.invalidActivation,
+          'Active corporation/user identity no longer matches company.db',
+        );
+      }
       userDatabase = await package.openReadOnly(
         'user.db',
         factory: _databaseFactory,
@@ -136,7 +246,9 @@ class WeComActiveDatasetResolver {
       );
       if (current == null ||
           current.activationId != activation.activationId ||
-          current.datasetId != activation.datasetId) {
+          current.datasetId != activation.datasetId ||
+          current.corporationId != activation.corporationId ||
+          current.userId != activation.userId) {
         throw const WeComActiveDatasetException(
           WeComActiveDatasetIssueCode.activeDatasetChanged,
           'Active dataset changed while repositories were being opened',
@@ -155,6 +267,7 @@ class WeComActiveDatasetResolver {
           baseRepository: WeComConversationRepository(sessionDatabase),
           overlayDatabase: _overlayDatabase,
         ),
+        identity: WeComCurrentIdentityRepository(userDatabase, identity),
         connections: [userDatabase, sessionDatabase],
       );
     } catch (_) {
@@ -169,7 +282,12 @@ class WeComActiveDatasetResolver {
   ) async {
     final rows = await executor.query(
       WeComOverlaySchema.datasetActivationsTable,
-      columns: ['activation_id', 'dataset_id'],
+      columns: [
+        'activation_id',
+        'dataset_id',
+        'current_corp_id',
+        'current_user_id',
+      ],
       orderBy: 'activation_id DESC',
       limit: 1,
     );
@@ -178,7 +296,13 @@ class WeComActiveDatasetResolver {
     }
     final activationId = rows.single['activation_id'];
     final datasetId = rows.single['dataset_id'];
-    if (activationId is! int || datasetId is! String) {
+    final corporationId = rows.single['current_corp_id'];
+    final userId = rows.single['current_user_id'];
+    if (activationId is! int ||
+        datasetId is! String ||
+        (corporationId != null && corporationId is! int) ||
+        (userId != null && userId is! int) ||
+        ((corporationId == null) != (userId == null))) {
       throw const WeComActiveDatasetException(
         WeComActiveDatasetIssueCode.invalidActivation,
         'Active dataset metadata is malformed',
@@ -187,6 +311,8 @@ class WeComActiveDatasetResolver {
     return _DatasetActivation(
       activationId: activationId,
       datasetId: datasetId,
+      corporationId: corporationId as int?,
+      userId: userId as int?,
     );
   }
 
@@ -206,8 +332,12 @@ class _DatasetActivation {
   const _DatasetActivation({
     required this.activationId,
     required this.datasetId,
+    required this.corporationId,
+    required this.userId,
   });
 
   final int activationId;
   final String datasetId;
+  final int? corporationId;
+  final int? userId;
 }

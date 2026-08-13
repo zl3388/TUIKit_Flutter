@@ -99,6 +99,8 @@ void main() {
         'previous_dataset_id',
         'dataset_id',
         'merge_id',
+        'current_corp_id',
+        'current_user_id',
         'created_at_micros',
       ],
     );
@@ -250,6 +252,49 @@ void main() {
       isEmpty,
     );
   });
+
+  test('upgrades version 2 activations without inventing an identity',
+      () async {
+    final rawDatabase = await databaseFactoryFfi.openDatabase(
+      databasePath,
+      options: OpenDatabaseOptions(
+        version: 2,
+        singleInstance: false,
+        onCreate: (database, version) async {
+          await WeComOverlaySchema.createVersion1(database);
+          for (final statement in WeComOverlaySchema.version2CreateStatements) {
+            await database.execute(statement);
+          }
+        },
+      ),
+    );
+    await rawDatabase.insert(
+      WeComOverlaySchema.datasetActivationsTable,
+      {
+        'previous_dataset_id': null,
+        'dataset_id': datasetId,
+        'merge_id': null,
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+    await rawDatabase.close();
+
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final activation = (await database.connection.query(
+      WeComOverlaySchema.datasetActivationsTable,
+    ))
+        .single;
+
+    expect(await database.connection.getVersion(), WeComOverlaySchema.version);
+    expect(activation['dataset_id'], datasetId);
+    expect(activation['current_corp_id'], isNull);
+    expect(activation['current_user_id'], isNull);
+  });
+
   test('reopening preserves the append-only revision history', () async {
     var database = await WeComOverlayDatabase.open(
       factory: databaseFactoryFfi,

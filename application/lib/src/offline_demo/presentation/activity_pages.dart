@@ -199,8 +199,8 @@ class CallRecordsPage extends StatelessWidget {
   }
 }
 
-class ScenarioPage extends StatelessWidget {
-  const ScenarioPage({required this.environment, super.key});
+class DataOverviewPage extends StatelessWidget {
+  const DataOverviewPage({required this.environment, super.key});
 
   final OfflineEnvironment environment;
 
@@ -208,14 +208,9 @@ class ScenarioPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final store = environment.store;
     return Scaffold(
-      appBar: AppBar(title: const Text('场景数据')),
+      appBar: AppBar(title: const Text('数据概览')),
       body: ListView(
         children: [
-          OfflineInfoTile(
-            icon: Icons.layers_outlined,
-            label: '场景',
-            value: store.scenarioName,
-          ),
           const OfflineInfoTile(
             icon: Icons.schema_outlined,
             label: 'Schema',

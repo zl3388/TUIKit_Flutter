@@ -2,7 +2,6 @@ import 'package:sqflite/sqflite.dart';
 
 abstract final class OfflineSeed {
   static const version = '1';
-  static const scenarioName = '协作团队基础场景';
   static const _createdAt = '2026-07-30T00:00:00.000Z';
 
   static Future<void> ensureSeeded(Database db) async {
@@ -504,11 +503,6 @@ abstract final class OfflineSeed {
     {
       'key': 'seed_version',
       'value': version,
-      'updated_at': _createdAt,
-    },
-    {
-      'key': 'scenario_name',
-      'value': scenarioName,
       'updated_at': _createdAt,
     },
     {

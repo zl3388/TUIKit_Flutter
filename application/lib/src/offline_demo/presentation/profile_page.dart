@@ -10,7 +10,15 @@ class ProfilePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final profile = environment.store.profile!;
+    final profile = environment.store.profile;
+    if (profile == null) {
+      return const _IdentityUnavailable();
+    }
+    final organization = [
+      profile.corporationName,
+      profile.department,
+      profile.title,
+    ].whereType<String>().where((value) => value.isNotEmpty).join(' · ');
     return ListView(
       children: [
         Container(
@@ -35,12 +43,13 @@ class ProfilePage extends StatelessWidget {
                           ),
                     ),
                     const SizedBox(height: 5),
-                    Text(
-                      '${profile.department} · ${profile.title}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Color(0xFF64727A)),
-                    ),
+                    if (organization.isNotEmpty)
+                      Text(
+                        organization,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Color(0xFF64727A)),
+                      ),
                   ],
                 ),
               ),
@@ -48,15 +57,10 @@ class ProfilePage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        const OfflineInfoTile(
-          icon: Icons.person_outline_rounded,
-          label: '身份',
-          value: '默认离线用户',
-        ),
         OfflineInfoTile(
-          icon: Icons.workspaces_outline,
-          label: '场景',
-          value: environment.store.scenarioName,
+          icon: Icons.person_outline_rounded,
+          label: '账号',
+          value: profile.account?.isNotEmpty == true ? profile.account! : '未设置',
         ),
         const OfflineInfoTile(
           icon: Icons.cloud_off_outlined,
@@ -78,6 +82,30 @@ class ProfilePage extends StatelessWidget {
           icon: Icons.mail_outline_rounded,
           label: '邮箱',
           value: profile.email ?? '未设置',
+        ),
+      ],
+    );
+  }
+}
+
+class _IdentityUnavailable extends StatelessWidget {
+  const _IdentityUnavailable();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      children: [
+        const SizedBox(height: 120),
+        Icon(
+          Icons.badge_outlined,
+          size: 48,
+          color: Theme.of(context).colorScheme.outline,
+        ),
+        const SizedBox(height: 16),
+        Text(
+          '未选择企业身份',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium,
         ),
       ],
     );

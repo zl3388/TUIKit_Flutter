@@ -21,6 +21,7 @@ class OfflineEnvironment {
     required this.repositories,
     required this.store,
     required this.wecomOverlayDatabase,
+    required this.wecomDatasetResolver,
     this.wecomRuntime,
   });
 
@@ -29,6 +30,7 @@ class OfflineEnvironment {
   final OfflineRepositoryBundle repositories;
   final OfflineDemoStore store;
   final WeComOverlayDatabase wecomOverlayDatabase;
+  final WeComActiveDatasetResolver wecomDatasetResolver;
   final WeComActiveDatasetRuntime? wecomRuntime;
 
   bool _closed = false;
@@ -97,18 +99,23 @@ abstract final class OfflineBootstrap {
       );
 
       ContactRepository contactRepository;
+      IdentityRepository identityRepository;
       try {
         runtime = await resolver.openActive();
         contactRepository = WeComContactRepository(runtime.directory);
+        identityRepository = runtime.identity;
       } on WeComActiveDatasetException catch (error) {
-        if (error.code != WeComActiveDatasetIssueCode.noActiveDataset) {
+        if (error.code != WeComActiveDatasetIssueCode.noActiveDataset &&
+            error.code != WeComActiveDatasetIssueCode.identityRequired) {
           rethrow;
         }
         contactRepository = const UnavailableContactRepository();
+        identityRepository = const UnavailableIdentityRepository();
       }
 
       final repositories = OfflineRepositoryBundle(
         database,
+        identityRepository: identityRepository,
         contactRepository: contactRepository,
       );
       final store = OfflineDemoStore(repositories);
@@ -119,6 +126,7 @@ abstract final class OfflineBootstrap {
         repositories: repositories,
         store: store,
         wecomOverlayDatabase: overlayDatabase,
+        wecomDatasetResolver: resolver,
         wecomRuntime: runtime,
       );
     } catch (_) {

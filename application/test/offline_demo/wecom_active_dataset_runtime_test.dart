@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_active_dataset_runtime.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_incremental_merge_planner.dart';
 import 'package:application/src/offline_demo/data/wecom_incremental_migration_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
@@ -9,6 +10,8 @@ import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'wecom_identity_test_fixture.dart';
 
 void main() {
   late Directory temporaryDirectory;
@@ -117,12 +120,97 @@ void main() {
       (await runtime.conversations.listConversations()).single.displayName,
       'Base room',
     );
+    final profile = await runtime.identity.currentProfile();
+    expect(profile.displayName, 'Base contact');
+    expect(profile.corporationName, 'Example Corporation');
     await runtime.close();
     await runtime.close();
 
     final reopened = await resolver.openActive();
     expect(reopened.datasetId, initial.datasetId);
     await reopened.close();
+  });
+
+  test('requires explicit selection for multiple corporations and can switch',
+      () async {
+    final imported = await _importPackage(
+      temporaryDirectory,
+      importer,
+      name: 'multiple',
+      contactName: 'First user',
+      conversationName: 'Room',
+      multipleCorporations: true,
+    );
+
+    await expectLater(
+      resolver.ensureInitialDataset(imported.datasetId),
+      throwsA(
+        isA<WeComActiveDatasetException>().having(
+          (error) => error.code,
+          'code',
+          WeComActiveDatasetIssueCode.identityRequired,
+        ),
+      ),
+    );
+    expect(await _activationCount(overlayDatabase), 0);
+
+    final inspection = await resolver.inspectIdentity(imported.datasetId);
+    expect(
+      inspection.status,
+      WeComIdentityResolutionStatus.ambiguousNoConfig,
+    );
+    expect(inspection.candidates, hasLength(2));
+
+    await resolver.ensureInitialDataset(
+      imported.datasetId,
+      selectedCorporationId: testCorporationId,
+    );
+    await resolver.selectCorporation(
+      datasetId: imported.datasetId,
+      corporationId: 200,
+    );
+    expect(await _activationCount(overlayDatabase), 2);
+
+    final runtime = await resolver.openActive();
+    expect((await runtime.identity.currentProfile()).id, '2');
+    await runtime.close();
+  });
+
+  test('repairs a legacy activation only after resolving its identity',
+      () async {
+    final imported = await _importPackage(
+      temporaryDirectory,
+      importer,
+      name: 'legacy-activation',
+      contactName: 'Current user',
+      conversationName: 'Room',
+    );
+    await overlayDatabase.connection.insert(
+      WeComOverlaySchema.datasetActivationsTable,
+      {
+        'previous_dataset_id': null,
+        'dataset_id': imported.datasetId,
+        'merge_id': null,
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+
+    await expectLater(
+      resolver.openActive(),
+      throwsA(
+        isA<WeComActiveDatasetException>().having(
+          (error) => error.code,
+          'code',
+          WeComActiveDatasetIssueCode.identityRequired,
+        ),
+      ),
+    );
+    expect(await resolver.ensureInitialDataset(imported.datasetId), isTrue);
+    expect(await _activationCount(overlayDatabase), 2);
+
+    final runtime = await resolver.openActive();
+    expect((await runtime.identity.currentProfile()).id, '1');
+    await runtime.close();
   });
 
   test('uses the latest dataset selected by an applied migration', () async {
@@ -148,6 +236,7 @@ void main() {
         contract: contract,
         databaseFactory: databaseFactoryFfi,
       ),
+      identityResolver: WeComIdentityResolver(databaseFactoryFfi),
     );
     final result = await migrations.migrate(
       oldBasePackage: oldPackage,
@@ -210,42 +299,23 @@ Future<WeComImportedPackage> _importPackage(
   required String name,
   required String contactName,
   required String conversationName,
+  bool multipleCorporations = false,
 }) async {
   final source = await Directory(p.join(root.path, name)).create();
-  await _createUserDatabase(source, contactName);
+  await createIdentityDatabases(source, contactName: contactName);
+  if (multipleCorporations) {
+    await addIdentityCandidate(
+      source,
+      corporationId: 200,
+      userId: 2,
+      name: 'Second user',
+    );
+  }
   await _createSessionDatabase(source, conversationName);
   return importer.importPackage(
     sourceDirectory: source,
     destinationRoot: Directory(p.join(root.path, 'imports')),
   );
-}
-
-Future<void> _createUserDatabase(
-  Directory source,
-  String contactName,
-) async {
-  final database = await databaseFactoryFfi.openDatabase(
-    p.join(source.path, 'user.db'),
-    options: OpenDatabaseOptions(singleInstance: false),
-  );
-  await database.execute(
-    'CREATE TABLE user_table ('
-    'id INTEGER PRIMARY KEY, '
-    "real_name TEXT NOT NULL DEFAULT '', "
-    "name TEXT NOT NULL DEFAULT '', "
-    "account TEXT NOT NULL DEFAULT '', "
-    "external_corp_name TEXT NOT NULL DEFAULT '', "
-    "external_job TEXT NOT NULL DEFAULT ''"
-    ')',
-  );
-  await database.insert(
-    'user_table',
-    {
-      'id': 1,
-      'name': contactName,
-    },
-  );
-  await database.close();
 }
 
 Future<void> _createSessionDatabase(
@@ -307,83 +377,55 @@ WeComPackageContract _contract() {
     formatVersion: 1,
     scope: 'active dataset runtime test',
     databases: [
-      WeComDatabaseContract(
-        fileName: 'user.db',
-        allowEmpty: false,
-        tables: {
-          'user_table': [
-            _column('id', 'INTEGER', primaryKeyPosition: 1),
-            _column('real_name', 'TEXT', notNull: true),
-            _column('name', 'TEXT', notNull: true),
-            _column('account', 'TEXT', notNull: true),
-            _column('external_corp_name', 'TEXT', notNull: true),
-            _column('external_job', 'TEXT', notNull: true),
-          ],
-        },
-        indexes: const {},
-      ),
+      ...identityDatabaseContracts(),
       WeComDatabaseContract(
         fileName: 'session.db',
         allowEmpty: false,
         tables: {
           'conversation_table': [
-            _column('con_numeric_id', 'INTEGER', primaryKeyPosition: 1),
-            _column('id', 'TEXT', notNull: true),
-            _column('name', 'TEXT', notNull: true),
-            _column('is_sticked', 'INTEGER', notNull: true),
-            _column('last_message_time', 'INTEGER'),
-            _column('last_message_id', 'INTEGER'),
-            _column('is_blocked', 'INTEGER', notNull: true),
-            _column('status', 'INTEGER', notNull: true),
-            _column('roomname_remark', 'TEXT'),
-            _column('fold_status', 'INTEGER'),
+            testColumn('con_numeric_id', 'INTEGER', primaryKeyPosition: 1),
+            testColumn('id', 'TEXT', notNull: true),
+            testColumn('name', 'TEXT', notNull: true),
+            testColumn('is_sticked', 'INTEGER', notNull: true),
+            testColumn('last_message_time', 'INTEGER'),
+            testColumn('last_message_id', 'INTEGER'),
+            testColumn('is_blocked', 'INTEGER', notNull: true),
+            testColumn('status', 'INTEGER', notNull: true),
+            testColumn('roomname_remark', 'TEXT'),
+            testColumn('fold_status', 'INTEGER'),
           ],
           'unread_conversation_table': [
-            _column(
+            testColumn(
               'conversation_id',
               'TEXT',
               notNull: true,
               primaryKeyPosition: 1,
             ),
-            _column('begin_cursor', 'INTEGER', notNull: true),
-            _column('current_cursor', 'INTEGER', notNull: true),
-            _column('unread_count', 'INTEGER', notNull: true),
+            testColumn('begin_cursor', 'INTEGER', notNull: true),
+            testColumn('current_cursor', 'INTEGER', notNull: true),
+            testColumn('unread_count', 'INTEGER', notNull: true),
           ],
           'conversation_user_table': [
-            _column(
+            testColumn(
               'conversation_id',
               'TEXT',
               notNull: true,
               primaryKeyPosition: 1,
             ),
-            _column(
+            testColumn(
               'user_id',
               'INTEGER',
               notNull: true,
               primaryKeyPosition: 2,
             ),
-            _column('join_time', 'INTEGER', notNull: true),
-            _column('gag_type', 'INTEGER', notNull: true),
-            _column('nick_name', 'TEXT'),
-            _column('is_admin', 'INTEGER'),
+            testColumn('join_time', 'INTEGER', notNull: true),
+            testColumn('gag_type', 'INTEGER', notNull: true),
+            testColumn('nick_name', 'TEXT'),
+            testColumn('is_admin', 'INTEGER'),
           ],
         },
         indexes: const {},
       ),
     ],
-  );
-}
-
-WeComColumnContract _column(
-  String name,
-  String type, {
-  bool notNull = false,
-  int primaryKeyPosition = 0,
-}) {
-  return WeComColumnContract(
-    name: name,
-    type: type,
-    notNull: notNull,
-    primaryKeyPosition: primaryKeyPosition,
   );
 }

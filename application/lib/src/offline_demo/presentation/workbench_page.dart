@@ -46,12 +46,12 @@ class WorkbenchPage extends StatelessWidget {
         ),
       ),
       _WorkbenchTool(
-        label: '场景数据',
+        label: '数据概览',
         icon: Icons.storage_outlined,
         color: const Color(0xFF7C3AED),
         open: () => Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (context) => ScenarioPage(environment: environment),
+            builder: (context) => DataOverviewPage(environment: environment),
           ),
         ),
       ),

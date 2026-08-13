@@ -4,6 +4,8 @@ import '../data/offline_database.dart';
 import 'models.dart';
 
 abstract interface class IdentityRepository {
+  bool get isAvailable;
+
   Future<OfflineProfile> currentProfile();
 }
 
@@ -48,32 +50,31 @@ abstract interface class ActivityRepository {
   Future<void> markNotificationRead(String notificationId);
 }
 
-abstract interface class SettingsRepository {
-  Future<String?> read(String key);
-}
-
 class OfflineRepositoryBundle {
   OfflineRepositoryBundle(
     OfflineDatabase database, {
+    IdentityRepository? identityRepository,
     ContactRepository? contactRepository,
-  })  : identity = SqliteIdentityRepository(database.connection),
+  })  : identity =
+            identityRepository ?? SqliteIdentityRepository(database.connection),
         contacts =
             contactRepository ?? SqliteContactRepository(database.connection),
         conversations = SqliteConversationRepository(database.connection),
-        activity = SqliteActivityRepository(database.connection),
-        settings = SqliteSettingsRepository(database.connection);
+        activity = SqliteActivityRepository(database.connection);
 
   final IdentityRepository identity;
   final ContactRepository contacts;
   final ConversationRepository conversations;
   final ActivityRepository activity;
-  final SettingsRepository settings;
 }
 
 class SqliteIdentityRepository implements IdentityRepository {
   const SqliteIdentityRepository(this._db);
 
   final Database _db;
+
+  @override
+  bool get isAvailable => true;
 
   @override
   Future<OfflineProfile> currentProfile() async {
@@ -88,6 +89,18 @@ LIMIT 1
       throw StateError('The offline scenario has no current profile.');
     }
     return OfflineProfile.fromRow(rows.single);
+  }
+}
+
+class UnavailableIdentityRepository implements IdentityRepository {
+  const UnavailableIdentityRepository();
+
+  @override
+  bool get isAvailable => false;
+
+  @override
+  Future<OfflineProfile> currentProfile() {
+    throw StateError('No active WeCom identity has been selected.');
   }
 }
 
@@ -336,23 +349,5 @@ ORDER BY c.started_at DESC
       where: 'id = ?',
       whereArgs: [notificationId],
     );
-  }
-}
-
-class SqliteSettingsRepository implements SettingsRepository {
-  const SqliteSettingsRepository(this._db);
-
-  final Database _db;
-
-  @override
-  Future<String?> read(String key) async {
-    final rows = await _db.query(
-      'settings',
-      columns: ['value'],
-      where: 'key = ?',
-      whereArgs: [key],
-      limit: 1,
-    );
-    return rows.isEmpty ? null : rows.single['value'] as String;
   }
 }

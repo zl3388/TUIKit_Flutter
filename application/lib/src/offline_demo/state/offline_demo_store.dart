@@ -14,9 +14,9 @@ class OfflineDemoStore extends ChangeNotifier {
   List<OfflineNotification> notifications = const [];
   List<OfflineAnnouncement> announcements = const [];
   List<OfflineCallRecord> callRecords = const [];
-  String scenarioName = '';
   bool isLoading = false;
 
+  bool get identityAvailable => repositories.identity.isAvailable;
   bool get contactsAvailable => repositories.contacts.isAvailable;
 
   int get unreadConversationCount => conversations.fold(
@@ -31,22 +31,23 @@ class OfflineDemoStore extends ChangeNotifier {
     isLoading = true;
     notifyListeners();
     try {
+      final identity = repositories.identity.isAvailable
+          ? repositories.identity.currentProfile()
+          : Future<OfflineProfile?>.value();
       final results = await Future.wait<Object?>([
-        repositories.identity.currentProfile(),
+        identity,
         repositories.contacts.listContacts(),
         repositories.conversations.listConversations(),
         repositories.activity.listNotifications(),
         repositories.activity.listAnnouncements(),
         repositories.activity.listCallRecords(),
-        repositories.settings.read('scenario_name'),
       ]);
-      profile = results[0] as OfflineProfile;
+      profile = results[0] as OfflineProfile?;
       contacts = results[1] as List<DirectoryContact>;
       conversations = results[2] as List<OfflineConversation>;
       notifications = results[3] as List<OfflineNotification>;
       announcements = results[4] as List<OfflineAnnouncement>;
       callRecords = results[5] as List<OfflineCallRecord>;
-      scenarioName = (results[6] as String?) ?? '';
     } finally {
       isLoading = false;
       notifyListeners();

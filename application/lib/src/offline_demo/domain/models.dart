@@ -6,6 +6,8 @@ class OfflineProfile {
     required this.department,
     required this.status,
     this.avatarPath,
+    this.account,
+    this.corporationName,
     this.phone,
     this.email,
   });
@@ -16,6 +18,8 @@ class OfflineProfile {
   final String department;
   final String status;
   final String? avatarPath;
+  final String? account;
+  final String? corporationName;
   final String? phone;
   final String? email;
 
@@ -26,6 +30,8 @@ class OfflineProfile {
         department: row['department']! as String,
         status: row['status']! as String,
         avatarPath: row['avatar_path'] as String?,
+        account: row['account'] as String?,
+        corporationName: row['corporation_name'] as String?,
         phone: row['phone'] as String?,
         email: row['email'] as String?,
       );

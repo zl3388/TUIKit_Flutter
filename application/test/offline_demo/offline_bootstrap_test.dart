@@ -9,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'wecom_identity_test_fixture.dart';
+
 void main() {
   late Directory temporaryDirectory;
   late Directory mediaRoot;
@@ -44,6 +46,8 @@ void main() {
     );
 
     expect(environment.store.contactsAvailable, isFalse);
+    expect(environment.store.identityAvailable, isFalse);
+    expect(environment.store.profile, isNull);
     expect(environment.store.contacts, isEmpty);
     expect(environment.wecomRuntime, isNull);
 
@@ -74,6 +78,11 @@ void main() {
     expect(environment.store.contacts.single.account, 'contact.account');
     expect(environment.store.contacts.single.organizationName, 'Example Corp');
     expect(environment.store.contacts.single.jobTitle, 'Engineer');
+    expect(environment.store.profile?.displayName, 'Base contact');
+    expect(environment.store.profile?.corporationName, 'Example Corporation');
+    expect(environment.store.profile?.department, 'Engineering');
+    expect(environment.store.profile?.title, 'Developer');
+    expect(environment.store.profile?.account, 'current');
 
     await environment.close();
     await environment.close();
@@ -119,7 +128,12 @@ Future<WeComImportedPackage> _importAndActivate({
   final source = await Directory(
     p.join(temporaryDirectory.path, 'source'),
   ).create();
-  await _createUserDatabase(source);
+  await createIdentityDatabases(
+    source,
+    contactName: 'Base contact',
+    externalCorporationName: 'Example Corp',
+    externalJob: 'Engineer',
+  );
   await _createSessionDatabase(source);
 
   final importer = WeComDatabasePackageImporter(
@@ -160,34 +174,6 @@ Future<WeComImportedPackage> _importAndActivate({
   return imported;
 }
 
-Future<void> _createUserDatabase(Directory source) async {
-  final database = await databaseFactoryFfi.openDatabase(
-    p.join(source.path, 'user.db'),
-    options: OpenDatabaseOptions(singleInstance: false),
-  );
-  await database.execute(
-    'CREATE TABLE user_table ('
-    'id INTEGER PRIMARY KEY NOT NULL, '
-    "real_name TEXT NOT NULL DEFAULT '', "
-    "name TEXT NOT NULL DEFAULT '', "
-    "account TEXT NOT NULL DEFAULT '', "
-    "external_corp_name TEXT NOT NULL DEFAULT '', "
-    "external_job TEXT NOT NULL DEFAULT ''"
-    ')',
-  );
-  await database.insert(
-    'user_table',
-    {
-      'id': 1,
-      'name': 'Base contact',
-      'account': 'contact.account',
-      'external_corp_name': 'Example Corp',
-      'external_job': 'Engineer',
-    },
-  );
-  await database.close();
-}
-
 Future<void> _createSessionDatabase(Directory source) async {
   final database = await databaseFactoryFfi.openDatabase(
     p.join(source.path, 'session.db'),
@@ -205,45 +191,22 @@ WeComPackageContract _contract() {
     formatVersion: 1,
     scope: 'offline bootstrap test',
     databases: [
-      WeComDatabaseContract(
-        fileName: 'user.db',
-        allowEmpty: false,
-        tables: {
-          'user_table': [
-            _column('id', 'INTEGER', notNull: true, primaryKeyPosition: 1),
-            _column('real_name', 'TEXT', notNull: true),
-            _column('name', 'TEXT', notNull: true),
-            _column('account', 'TEXT', notNull: true),
-            _column('external_corp_name', 'TEXT', notNull: true),
-            _column('external_job', 'TEXT', notNull: true),
-          ],
-        },
-        indexes: const {},
-      ),
+      ...identityDatabaseContracts(),
       WeComDatabaseContract(
         fileName: 'session.db',
         allowEmpty: false,
         tables: {
           'runtime_marker': [
-            _column('id', 'INTEGER', notNull: true, primaryKeyPosition: 1),
+            testColumn(
+              'id',
+              'INTEGER',
+              notNull: true,
+              primaryKeyPosition: 1,
+            ),
           ],
         },
         indexes: const {},
       ),
     ],
-  );
-}
-
-WeComColumnContract _column(
-  String name,
-  String type, {
-  bool notNull = false,
-  int primaryKeyPosition = 0,
-}) {
-  return WeComColumnContract(
-    name: name,
-    type: type,
-    notNull: notNull,
-    primaryKeyPosition: primaryKeyPosition,
   );
 }
