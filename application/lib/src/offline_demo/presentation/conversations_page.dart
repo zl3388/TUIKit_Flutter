@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../domain/models.dart';
+import '../domain/repositories.dart';
 import '../state/offline_demo_store.dart';
 import 'offline_theme.dart';
 import 'offline_widgets.dart';
@@ -27,8 +28,16 @@ class _ConversationsPageState extends State<ConversationsPage> {
   }
 
   Future<void> _openConversation(OfflineConversation conversation) async {
+    if (!widget.store.supportsConversationFeature(
+      ConversationFeature.messages,
+    )) {
+      return;
+    }
     try {
-      if (conversation.unreadCount > 0) {
+      if (conversation.unreadCount > 0 &&
+          widget.store.supportsConversationFeature(
+            ConversationFeature.markRead,
+          )) {
         await widget.store.markConversationRead(conversation.id);
       }
       if (!mounted) {
@@ -156,7 +165,13 @@ class _ConversationsPageState extends State<ConversationsPage> {
           child: RefreshIndicator(
             onRefresh: store.load,
             child: conversations.isEmpty
-                ? const _EmptyConversationSearch()
+                ? _EmptyConversationSearch(
+                    message: !store.conversationsAvailable
+                        ? '未选择会话数据'
+                        : query.isEmpty
+                            ? '暂无会话'
+                            : '未找到会话',
+                  )
                 : ListView.separated(
                     physics: const AlwaysScrollableScrollPhysics(),
                     itemCount: conversations.length,
@@ -166,7 +181,12 @@ class _ConversationsPageState extends State<ConversationsPage> {
                       final conversation = conversations[index];
                       return _ConversationTile(
                         conversation: conversation,
-                        onTap: () => _openConversation(conversation),
+                        onTap: store.supportsConversationFeature(
+                          ConversationFeature.messages,
+                        )
+                            ? () => _openConversation(conversation)
+                            : null,
+                        features: store.repositories.conversations.features,
                         onAction: (action) =>
                             _handleConversationAction(conversation, action),
                       );
@@ -200,7 +220,9 @@ class _IdentityRequiredSummary extends StatelessWidget {
 }
 
 class _EmptyConversationSearch extends StatelessWidget {
-  const _EmptyConversationSearch();
+  const _EmptyConversationSearch({required this.message});
+
+  final String message;
 
   @override
   Widget build(BuildContext context) {
@@ -215,7 +237,7 @@ class _EmptyConversationSearch extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          '未找到会话',
+          message,
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: const Color(0xFF64727A),
@@ -326,11 +348,13 @@ class _ConversationTile extends StatelessWidget {
     required this.conversation,
     required this.onTap,
     required this.onAction,
+    required this.features,
   });
 
   final OfflineConversation conversation;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final ValueChanged<_ConversationAction> onAction;
+  final Set<ConversationFeature> features;
 
   @override
   Widget build(BuildContext context) {
@@ -355,58 +379,69 @@ class _ConversationTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Text(
-              formatTime(conversation.lastMessageAt),
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: const Color(0xFF7A878D),
-                  ),
-            ),
-            SizedBox.square(
-              dimension: 38,
-              child: PopupMenuButton<_ConversationAction>(
-                tooltip: '会话操作',
-                padding: EdgeInsets.zero,
-                onSelected: onAction,
-                icon: const Icon(Icons.more_vert_rounded, size: 20),
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: _ConversationAction.togglePinned,
-                    child: _MenuLabel(
-                      icon: conversation.isPinned
-                          ? Icons.push_pin_outlined
-                          : Icons.push_pin_rounded,
-                      label: conversation.isPinned ? '取消置顶' : '置顶',
+            if (conversation.lastMessageAt != null)
+              Text(
+                formatTime(conversation.lastMessageAt!),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: const Color(0xFF7A878D),
                     ),
-                  ),
-                  PopupMenuItem(
-                    value: _ConversationAction.toggleMuted,
-                    child: _MenuLabel(
-                      icon: conversation.isMuted
-                          ? Icons.notifications_outlined
-                          : Icons.notifications_off_outlined,
-                      label: conversation.isMuted ? '开启提醒' : '免打扰',
-                    ),
-                  ),
-                  if (conversation.unreadCount > 0)
-                    const PopupMenuItem(
-                      value: _ConversationAction.markRead,
-                      child: _MenuLabel(
-                        icon: Icons.mark_chat_read_outlined,
-                        label: '标为已读',
-                      ),
-                    ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(
-                    value: _ConversationAction.delete,
-                    child: _MenuLabel(
-                      icon: Icons.delete_outline_rounded,
-                      label: '删除会话',
-                      destructive: true,
-                    ),
-                  ),
-                ],
               ),
-            ),
+            if (features.contains(ConversationFeature.pin) ||
+                features.contains(ConversationFeature.mute) ||
+                (conversation.unreadCount > 0 &&
+                    features.contains(ConversationFeature.markRead)) ||
+                features.contains(ConversationFeature.delete))
+              SizedBox.square(
+                dimension: 38,
+                child: PopupMenuButton<_ConversationAction>(
+                  tooltip: '会话操作',
+                  padding: EdgeInsets.zero,
+                  onSelected: onAction,
+                  icon: const Icon(Icons.more_vert_rounded, size: 20),
+                  itemBuilder: (context) => [
+                    if (features.contains(ConversationFeature.pin))
+                      PopupMenuItem(
+                        value: _ConversationAction.togglePinned,
+                        child: _MenuLabel(
+                          icon: conversation.isPinned
+                              ? Icons.push_pin_outlined
+                              : Icons.push_pin_rounded,
+                          label: conversation.isPinned ? '取消置顶' : '置顶',
+                        ),
+                      ),
+                    if (features.contains(ConversationFeature.mute))
+                      PopupMenuItem(
+                        value: _ConversationAction.toggleMuted,
+                        child: _MenuLabel(
+                          icon: conversation.isMuted
+                              ? Icons.notifications_outlined
+                              : Icons.notifications_off_outlined,
+                          label: conversation.isMuted ? '开启提醒' : '免打扰',
+                        ),
+                      ),
+                    if (conversation.unreadCount > 0 &&
+                        features.contains(ConversationFeature.markRead))
+                      const PopupMenuItem(
+                        value: _ConversationAction.markRead,
+                        child: _MenuLabel(
+                          icon: Icons.mark_chat_read_outlined,
+                          label: '标为已读',
+                        ),
+                      ),
+                    if (features.contains(ConversationFeature.delete)) ...[
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
+                        value: _ConversationAction.delete,
+                        child: _MenuLabel(
+                          icon: Icons.delete_outline_rounded,
+                          label: '删除会话',
+                          destructive: true,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
           ],
         ),
         subtitle: Padding(

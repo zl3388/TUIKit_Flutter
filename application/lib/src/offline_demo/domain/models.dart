@@ -102,7 +102,7 @@ class OfflineConversation {
   final String title;
   final String? avatarPath;
   final String lastMessagePreview;
-  final DateTime lastMessageAt;
+  final DateTime? lastMessageAt;
   final String draftText;
   final int unreadCount;
   final bool isPinned;
@@ -121,6 +121,26 @@ class OfflineConversation {
         isPinned: row['is_pinned'] == 1,
         isMuted: row['is_muted'] == 1,
       );
+}
+
+class OfflineConversationMember {
+  const OfflineConversationMember({
+    required this.conversationId,
+    required this.userId,
+    required this.displayName,
+    required this.isAdmin,
+    required this.gagType,
+    this.nickname,
+    this.joinedAt,
+  });
+
+  final String conversationId;
+  final String userId;
+  final String displayName;
+  final String? nickname;
+  final bool isAdmin;
+  final int gagType;
+  final DateTime? joinedAt;
 }
 
 class OfflineMessage {

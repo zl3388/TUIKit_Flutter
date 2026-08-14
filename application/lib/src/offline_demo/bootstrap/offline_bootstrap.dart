@@ -10,6 +10,8 @@ import '../data/offline_database.dart';
 import '../data/wecom_active_dataset_runtime.dart';
 import '../data/wecom_contact_repository.dart';
 import '../data/wecom_database_package.dart';
+import '../data/wecom_offline_conversation_repository.dart';
+import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
 import '../domain/repositories.dart';
 import '../state/offline_demo_store.dart';
@@ -100,10 +102,21 @@ abstract final class OfflineBootstrap {
 
       ContactRepository contactRepository;
       IdentityRepository identityRepository;
+      ConversationRepository conversationRepository;
       try {
         runtime = await resolver.openActive();
         contactRepository = WeComContactRepository(runtime.directory);
         identityRepository = runtime.identity;
+        conversationRepository = WeComOfflineConversationRepository(
+          datasetId: runtime.datasetId,
+          currentUserId: runtime.identity.identity.userId,
+          conversations: runtime.conversations,
+          contacts: contactRepository,
+          commands: WeComOverlayCommandService(
+            overlayDatabase: overlayDatabase,
+            contract: contract,
+          ),
+        );
       } on WeComActiveDatasetException catch (error) {
         if (error.code != WeComActiveDatasetIssueCode.noActiveDataset &&
             error.code != WeComActiveDatasetIssueCode.identityRequired) {
@@ -111,12 +124,14 @@ abstract final class OfflineBootstrap {
         }
         contactRepository = const UnavailableContactRepository();
         identityRepository = const UnavailableIdentityRepository();
+        conversationRepository = const UnavailableConversationRepository();
       }
 
       final repositories = OfflineRepositoryBundle(
         database,
         identityRepository: identityRepository,
         contactRepository: contactRepository,
+        conversationRepository: conversationRepository,
       );
       final store = OfflineDemoStore(repositories);
       await store.load();

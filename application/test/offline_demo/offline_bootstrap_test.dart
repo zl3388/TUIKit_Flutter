@@ -5,6 +5,7 @@ import 'package:application/src/offline_demo/data/wecom_active_dataset_runtime.d
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
+import 'package:application/src/offline_demo/domain/repositories.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -46,9 +47,11 @@ void main() {
     );
 
     expect(environment.store.contactsAvailable, isFalse);
+    expect(environment.store.conversationsAvailable, isFalse);
     expect(environment.store.identityAvailable, isFalse);
     expect(environment.store.profile, isNull);
     expect(environment.store.contacts, isEmpty);
+    expect(environment.store.conversations, isEmpty);
     expect(environment.wecomRuntime, isNull);
 
     await environment.close();
@@ -71,6 +74,7 @@ void main() {
     );
 
     expect(environment.store.contactsAvailable, isTrue);
+    expect(environment.store.conversationsAvailable, isTrue);
     expect(environment.wecomRuntime?.datasetId, imported.datasetId);
     expect(environment.store.contacts, hasLength(1));
     expect(environment.store.contacts.single.id, '1');
@@ -83,9 +87,41 @@ void main() {
     expect(environment.store.profile?.department, 'Engineering');
     expect(environment.store.profile?.title, 'Developer');
     expect(environment.store.profile?.account, 'current');
+    expect(environment.store.conversations, hasLength(1));
+    expect(environment.store.conversations.single.title, 'Example room');
+    expect(environment.store.conversations.single.unreadCount, 2);
+    expect(
+      environment.store.supportsConversationFeature(ConversationFeature.pin),
+      isTrue,
+    );
+    expect(
+      environment.store.supportsConversationFeature(
+        ConversationFeature.markRead,
+      ),
+      isFalse,
+    );
+    final members = await environment.store.membersFor('R:example');
+    expect(members, hasLength(1));
+    expect(members.single.displayName, 'Overlay contact');
+
+    await environment.store.setConversationPinned('R:example', true);
+    await environment.store.setConversationMuted('R:example', true);
+    expect(environment.store.conversations.single.isPinned, isTrue);
+    expect(environment.store.conversations.single.isMuted, isTrue);
 
     await environment.close();
     await environment.close();
+
+    final reopened = await OfflineBootstrap.create(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+      mediaRootDirectory: mediaRoot,
+      wecomRootDirectory: wecomRoot,
+      wecomContract: contract,
+    );
+    expect(reopened.store.conversations.single.isPinned, isTrue);
+    expect(reopened.store.conversations.single.isMuted, isTrue);
+    await reopened.close();
   });
 
   test('propagates active package corruption and releases opened resources',
@@ -179,10 +215,60 @@ Future<void> _createSessionDatabase(Directory source) async {
     p.join(source.path, 'session.db'),
     options: OpenDatabaseOptions(singleInstance: false),
   );
-  await database.execute(
-    'CREATE TABLE runtime_marker (id INTEGER PRIMARY KEY NOT NULL)',
-  );
-  await database.insert('runtime_marker', {'id': 1});
+  await database.execute('''
+CREATE TABLE conversation_table (
+  con_numeric_id INTEGER PRIMARY KEY NOT NULL,
+  id TEXT NOT NULL DEFAULT '' UNIQUE,
+  name TEXT NOT NULL DEFAULT '',
+  is_sticked INTEGER NOT NULL DEFAULT 0,
+  last_message_time INTEGER DEFAULT 0,
+  last_message_id INTEGER DEFAULT 0,
+  is_blocked INTEGER NOT NULL DEFAULT 0,
+  status INTEGER NOT NULL DEFAULT 0,
+  roomname_remark TEXT DEFAULT '',
+  fold_status INTEGER DEFAULT 0
+)
+''');
+  await database.execute('''
+CREATE TABLE unread_conversation_table (
+  conversation_id TEXT PRIMARY KEY NOT NULL DEFAULT '',
+  begin_cursor INTEGER NOT NULL DEFAULT 0,
+  current_cursor INTEGER NOT NULL DEFAULT 0,
+  unread_count INTEGER NOT NULL DEFAULT 0
+)
+''');
+  await database.execute('''
+CREATE TABLE conversation_user_table (
+  conversation_id TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL DEFAULT 0,
+  join_time INTEGER NOT NULL DEFAULT 0,
+  gag_type INTEGER NOT NULL DEFAULT 0,
+  nick_name TEXT DEFAULT '',
+  is_admin INTEGER DEFAULT 0,
+  PRIMARY KEY (conversation_id, user_id)
+)
+''');
+  await database.insert('conversation_table', {
+    'con_numeric_id': 1,
+    'id': 'R:example',
+    'name': 'Example room',
+    'last_message_time': 1700000000,
+    'last_message_id': 10,
+  });
+  await database.insert('unread_conversation_table', {
+    'conversation_id': 'R:example',
+    'begin_cursor': 8,
+    'current_cursor': 10,
+    'unread_count': 2,
+  });
+  await database.insert('conversation_user_table', {
+    'conversation_id': 'R:example',
+    'user_id': testCurrentUserId,
+    'join_time': 1600000000,
+    'gag_type': 0,
+    'nick_name': '',
+    'is_admin': 0,
+  });
   await database.close();
 }
 
@@ -196,13 +282,51 @@ WeComPackageContract _contract() {
         fileName: 'session.db',
         allowEmpty: false,
         tables: {
-          'runtime_marker': [
+          'conversation_table': [
             testColumn(
-              'id',
+              'con_numeric_id',
               'INTEGER',
               notNull: true,
               primaryKeyPosition: 1,
             ),
+            testColumn('id', 'TEXT', notNull: true),
+            testColumn('name', 'TEXT', notNull: true),
+            testColumn('is_sticked', 'INTEGER', notNull: true),
+            testColumn('last_message_time', 'INTEGER'),
+            testColumn('last_message_id', 'INTEGER'),
+            testColumn('is_blocked', 'INTEGER', notNull: true),
+            testColumn('status', 'INTEGER', notNull: true),
+            testColumn('roomname_remark', 'TEXT'),
+            testColumn('fold_status', 'INTEGER'),
+          ],
+          'unread_conversation_table': [
+            testColumn(
+              'conversation_id',
+              'TEXT',
+              notNull: true,
+              primaryKeyPosition: 1,
+            ),
+            testColumn('begin_cursor', 'INTEGER', notNull: true),
+            testColumn('current_cursor', 'INTEGER', notNull: true),
+            testColumn('unread_count', 'INTEGER', notNull: true),
+          ],
+          'conversation_user_table': [
+            testColumn(
+              'conversation_id',
+              'TEXT',
+              notNull: true,
+              primaryKeyPosition: 1,
+            ),
+            testColumn(
+              'user_id',
+              'INTEGER',
+              notNull: true,
+              primaryKeyPosition: 2,
+            ),
+            testColumn('join_time', 'INTEGER', notNull: true),
+            testColumn('gag_type', 'INTEGER', notNull: true),
+            testColumn('nick_name', 'TEXT'),
+            testColumn('is_admin', 'INTEGER'),
           ],
         },
         indexes: const {},

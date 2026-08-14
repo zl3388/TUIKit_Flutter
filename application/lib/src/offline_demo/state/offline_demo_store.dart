@@ -18,6 +18,11 @@ class OfflineDemoStore extends ChangeNotifier {
 
   bool get identityAvailable => repositories.identity.isAvailable;
   bool get contactsAvailable => repositories.contacts.isAvailable;
+  bool get conversationsAvailable => repositories.conversations.isAvailable;
+
+  bool supportsConversationFeature(ConversationFeature feature) {
+    return repositories.conversations.features.contains(feature);
+  }
 
   int get unreadConversationCount => conversations.fold(
         0,
@@ -61,6 +66,10 @@ class OfflineDemoStore extends ChangeNotifier {
 
   Future<List<OfflineMessage>> messagesFor(String conversationId) {
     return repositories.conversations.listMessages(conversationId);
+  }
+
+  Future<List<OfflineConversationMember>> membersFor(String conversationId) {
+    return repositories.conversations.listMembers(conversationId);
   }
 
   Future<OfflineMessage> sendTextMessage({

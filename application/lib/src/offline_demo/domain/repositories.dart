@@ -15,8 +15,26 @@ abstract interface class ContactRepository {
   Future<List<DirectoryContact>> listContacts();
 }
 
+enum ConversationFeature {
+  members,
+  messages,
+  attachments,
+  sendText,
+  pin,
+  mute,
+  markRead,
+  draft,
+  delete,
+}
+
 abstract interface class ConversationRepository {
+  bool get isAvailable;
+
+  Set<ConversationFeature> get features;
+
   Future<List<OfflineConversation>> listConversations();
+
+  Future<List<OfflineConversationMember>> listMembers(String conversationId);
 
   Future<List<OfflineMessage>> listMessages(String conversationId);
 
@@ -55,11 +73,13 @@ class OfflineRepositoryBundle {
     OfflineDatabase database, {
     IdentityRepository? identityRepository,
     ContactRepository? contactRepository,
+    ConversationRepository? conversationRepository,
   })  : identity =
             identityRepository ?? SqliteIdentityRepository(database.connection),
         contacts =
             contactRepository ?? SqliteContactRepository(database.connection),
-        conversations = SqliteConversationRepository(database.connection),
+        conversations = conversationRepository ??
+            SqliteConversationRepository(database.connection),
         activity = SqliteActivityRepository(database.connection);
 
   final IdentityRepository identity;
@@ -150,12 +170,58 @@ class SqliteConversationRepository implements ConversationRepository {
   var _messageSequence = 0;
 
   @override
+  bool get isAvailable => true;
+
+  @override
+  Set<ConversationFeature> get features => const {
+        ConversationFeature.members,
+        ConversationFeature.messages,
+        ConversationFeature.attachments,
+        ConversationFeature.sendText,
+        ConversationFeature.pin,
+        ConversationFeature.mute,
+        ConversationFeature.markRead,
+        ConversationFeature.draft,
+        ConversationFeature.delete,
+      };
+
+  @override
   Future<List<OfflineConversation>> listConversations() async {
     final rows = await _db.query(
       'conversations',
       orderBy: 'is_pinned DESC, last_message_at DESC',
     );
     return rows.map(OfflineConversation.fromRow).toList(growable: false);
+  }
+
+  @override
+  Future<List<OfflineConversationMember>> listMembers(
+    String conversationId,
+  ) async {
+    final rows = await _db.rawQuery(
+      '''
+SELECT cm.conversation_id, cm.profile_id, cm.role, cm.joined_at,
+       p.display_name
+FROM conversation_members cm
+JOIN profiles p ON p.id = cm.profile_id
+WHERE cm.conversation_id = ?
+ORDER BY cm.profile_id
+''',
+      [conversationId],
+    );
+    return rows
+        .map(
+          (row) => OfflineConversationMember(
+            conversationId: row['conversation_id']! as String,
+            userId: row['profile_id']! as String,
+            displayName: row['display_name']! as String,
+            nickname: null,
+            isAdmin: row['role'] == 'admin',
+            gagType: 0,
+            joinedAt: DateTime.parse(row['joined_at']! as String),
+          ),
+        )
+        .toList(growable: false);
   }
 
   @override
@@ -299,6 +365,69 @@ LIMIT 1
     if (updated != 1) {
       throw StateError('Conversation $conversationId does not exist.');
     }
+  }
+}
+
+class UnavailableConversationRepository implements ConversationRepository {
+  const UnavailableConversationRepository();
+
+  @override
+  bool get isAvailable => false;
+
+  @override
+  Set<ConversationFeature> get features => const {};
+
+  @override
+  Future<List<OfflineConversation>> listConversations() async => const [];
+
+  @override
+  Future<List<OfflineConversationMember>> listMembers(String conversationId) {
+    return _unavailable();
+  }
+
+  @override
+  Future<List<OfflineMessage>> listMessages(String conversationId) {
+    return _unavailable();
+  }
+
+  @override
+  Future<List<OfflineAttachment>> listAttachments(String messageId) {
+    return _unavailable();
+  }
+
+  @override
+  Future<OfflineMessage> sendTextMessage({
+    required String conversationId,
+    required String senderProfileId,
+    required String text,
+    DateTime? sentAt,
+  }) {
+    return _unavailable();
+  }
+
+  @override
+  Future<void> setPinned(String conversationId, bool isPinned) {
+    return _unavailable();
+  }
+
+  @override
+  Future<void> setMuted(String conversationId, bool isMuted) {
+    return _unavailable();
+  }
+
+  @override
+  Future<void> markRead(String conversationId) => _unavailable();
+
+  @override
+  Future<void> saveDraft(String conversationId, String text) => _unavailable();
+
+  @override
+  Future<void> deleteConversation(String conversationId) => _unavailable();
+
+  Future<T> _unavailable<T>() {
+    return Future<T>.error(
+      StateError('No active WeCom conversation dataset is available.'),
+    );
   }
 }
 
