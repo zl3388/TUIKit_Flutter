@@ -542,13 +542,25 @@ class _ConversationPageState extends State<ConversationPage> {
   var _canSend = false;
   Timer? _draftTimer;
 
+  bool get _canSendText => widget.store.supportsConversationFeature(
+        ConversationFeature.sendText,
+      );
+
+  bool get _canSaveDraft => widget.store.supportsConversationFeature(
+        ConversationFeature.draft,
+      );
+
   @override
   void initState() {
     super.initState();
     _composerController = TextEditingController(
       text: widget.conversation.draftText,
-    )..addListener(_handleComposerChanged);
-    _canSend = widget.currentProfileId != null &&
+    );
+    if (_canSendText) {
+      _composerController.addListener(_handleComposerChanged);
+    }
+    _canSend = _canSendText &&
+        widget.currentProfileId != null &&
         widget.conversation.draftText.trim().isNotEmpty;
     _loadMessages(scrollToEnd: true);
   }
@@ -578,6 +590,9 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 
   Future<void> _persistDraft() async {
+    if (!_canSaveDraft) {
+      return;
+    }
     try {
       await widget.store.saveConversationDraft(
         widget.conversation.id,
@@ -614,6 +629,9 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 
   Future<void> _sendMessage() async {
+    if (!_canSendText) {
+      return;
+    }
     final text = _composerController.text.trim();
     if (text.isEmpty || _isSending) {
       return;
@@ -661,7 +679,7 @@ class _ConversationPageState extends State<ConversationPage> {
       body: Column(
         children: [
           Expanded(child: _buildMessages(context)),
-          _buildComposer(context),
+          if (_canSendText) _buildComposer(context),
         ],
       ),
     );
@@ -826,7 +844,7 @@ class _MessageBubble extends StatelessWidget {
                             color: const Color(0xFF849096),
                           ),
                     ),
-                    if (isMine) ...[
+                    if (isMine && message.status == 'sent') ...[
                       const SizedBox(width: 4),
                       const Icon(
                         Icons.done_rounded,

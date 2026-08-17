@@ -8,6 +8,7 @@ import 'wecom_directory_repository.dart';
 import 'wecom_identity_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
 import 'wecom_merged_directory_repository.dart';
+import 'wecom_message_repository.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
 
@@ -39,6 +40,7 @@ class WeComActiveDatasetRuntime {
     required this.package,
     required this.directory,
     required this.conversations,
+    required this.messages,
     required this.identity,
     required List<Database> connections,
   }) : _connections = connections;
@@ -46,6 +48,7 @@ class WeComActiveDatasetRuntime {
   final WeComImportedPackage package;
   final WeComMergedDirectoryRepository directory;
   final WeComMergedConversationRepository conversations;
+  final WeComMessageRepository messages;
   final WeComCurrentIdentityRepository identity;
   final List<Database> _connections;
 
@@ -213,6 +216,8 @@ class WeComActiveDatasetResolver {
     );
     Database? userDatabase;
     Database? sessionDatabase;
+    Database? messageDatabase;
+    Database? messageLookupDatabase;
     try {
       final corporationId = activation.corporationId;
       final userId = activation.userId;
@@ -241,6 +246,14 @@ class WeComActiveDatasetResolver {
         'session.db',
         factory: _databaseFactory,
       );
+      messageDatabase = await package.openReadOnly(
+        'message.db',
+        factory: _databaseFactory,
+      );
+      messageLookupDatabase = await package.openReadOnly(
+        'message_lookup.db',
+        factory: _databaseFactory,
+      );
       final current = await _readLatestActivation(
         _overlayDatabase.connection,
       );
@@ -267,10 +280,21 @@ class WeComActiveDatasetResolver {
           baseRepository: WeComConversationRepository(sessionDatabase),
           overlayDatabase: _overlayDatabase,
         ),
+        messages: WeComMessageRepository(
+          messageDatabase: messageDatabase,
+          lookupDatabase: messageLookupDatabase,
+        ),
         identity: WeComCurrentIdentityRepository(userDatabase, identity),
-        connections: [userDatabase, sessionDatabase],
+        connections: [
+          userDatabase,
+          sessionDatabase,
+          messageDatabase,
+          messageLookupDatabase,
+        ],
       );
     } catch (_) {
+      await _closeQuietly(messageLookupDatabase);
+      await _closeQuietly(messageDatabase);
       await _closeQuietly(sessionDatabase);
       await _closeQuietly(userDatabase);
       rethrow;

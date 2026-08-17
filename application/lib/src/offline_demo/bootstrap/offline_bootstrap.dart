@@ -111,6 +111,7 @@ abstract final class OfflineBootstrap {
           datasetId: runtime.datasetId,
           currentUserId: runtime.identity.identity.userId,
           conversations: runtime.conversations,
+          messages: runtime.messages,
           contacts: contactRepository,
           commands: WeComOverlayCommandService(
             overlayDatabase: overlayDatabase,

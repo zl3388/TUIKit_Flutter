@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'wecom_identity_test_fixture.dart';
+import 'wecom_message_test_fixture.dart';
 
 void main() {
   late Directory temporaryDirectory;
@@ -171,6 +172,33 @@ Future<WeComImportedPackage> _importAndActivate({
     externalJob: 'Engineer',
   );
   await _createSessionDatabase(source);
+  await createMessageDatabases(
+    source,
+    conversationNumericId: 1,
+    messages: const [
+      TestWeComMessage(
+        messageId: 10,
+        serverId: 10,
+        sequence: 10,
+        senderId: testCurrentUserId,
+        conversationId: 'R:example',
+        sendTime: 1700000000,
+        content: [
+          0x0a,
+          0x09,
+          0x08,
+          0x00,
+          0x12,
+          0x05,
+          0x0a,
+          0x03,
+          0xe5,
+          0x86,
+          0x8d,
+        ],
+      ),
+    ],
+  );
 
   final importer = WeComDatabasePackageImporter(
     contract: contract,
@@ -345,6 +373,7 @@ WeComPackageContract _contract() {
         },
         indexes: const {},
       ),
+      ...messageDatabaseContracts(),
     ],
   );
 }

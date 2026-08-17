@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_conversation_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_message_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_offline_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
@@ -14,11 +15,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'wecom_message_test_fixture.dart';
+
 void main() {
   const datasetId =
       '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
   late Directory temporaryDirectory;
   late Database baseDatabase;
+  late Database messageDatabase;
+  late Database lookupDatabase;
   late WeComOverlayDatabase overlayDatabase;
   late WeComOfflineConversationRepository repository;
 
@@ -32,6 +37,66 @@ void main() {
     await _createBaseFixture(basePath);
     baseDatabase = await databaseFactoryFfi.openDatabase(
       basePath,
+      options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+    );
+    await createMessageDatabases(
+      temporaryDirectory,
+      conversationNumericId: 1,
+      messages: const [
+        TestWeComMessage(
+          messageId: 1,
+          serverId: 101,
+          sequence: 10,
+          senderId: 2,
+          conversationId: 'S:1_2',
+          sendTime: 10,
+          content: [
+            0x0a,
+            0x09,
+            0x08,
+            0x00,
+            0x12,
+            0x05,
+            0x0a,
+            0x03,
+            0xe5,
+            0x86,
+            0x8d,
+          ],
+        ),
+        TestWeComMessage(
+          messageId: 2,
+          serverId: 102,
+          sequence: 20,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 20,
+          flag: 131074,
+          content: [
+            0x0a,
+            0x0c,
+            0x08,
+            0x00,
+            0x12,
+            0x08,
+            0x0a,
+            0x06,
+            0xe5,
+            0xa5,
+            0xbd,
+            0xe7,
+            0x9a,
+            0x84,
+          ],
+        ),
+      ],
+    );
+    messageDatabase = await databaseFactoryFfi.openDatabase(
+      p.join(temporaryDirectory.path, 'message.db'),
+      options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+    );
+    lookupDatabase = await databaseFactoryFfi.openDatabase(
+      p.join(temporaryDirectory.path, 'message_lookup.db'),
       options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
     );
     overlayDatabase = await WeComOverlayDatabase.open(
@@ -56,6 +121,10 @@ void main() {
         baseRepository: WeComConversationRepository(baseDatabase),
         overlayDatabase: overlayDatabase,
       ),
+      messages: WeComMessageRepository(
+        messageDatabase: messageDatabase,
+        lookupDatabase: lookupDatabase,
+      ),
       contacts: const _FixtureContacts(),
       commands: WeComOverlayCommandService(
         overlayDatabase: overlayDatabase,
@@ -65,6 +134,8 @@ void main() {
   });
 
   tearDown(() async {
+    await lookupDatabase.close();
+    await messageDatabase.close();
     await baseDatabase.close();
     await overlayDatabase.close();
     await temporaryDirectory.delete(recursive: true);
@@ -76,6 +147,7 @@ void main() {
     expect(repository.isAvailable, isTrue);
     expect(repository.features, {
       ConversationFeature.members,
+      ConversationFeature.messages,
       ConversationFeature.pin,
       ConversationFeature.mute,
     });
@@ -89,6 +161,7 @@ void main() {
     expect(conversations.last.unreadCount, 3);
     expect(conversations.last.isMuted, isTrue);
     expect(conversations.last.draftText, '111');
+    expect(conversations.last.lastMessagePreview, '好的');
     expect(
       conversations.last.lastMessageAt,
       DateTime.fromMillisecondsSinceEpoch(200000, isUtc: true),
@@ -104,6 +177,21 @@ void main() {
     expect(
       members.single.joinedAt,
       DateTime.fromMillisecondsSinceEpoch(100000, isUtc: true),
+    );
+
+    final messages = await repository.listMessages('S:1_2');
+    expect(messages.map((message) => message.text), ['再', '好的']);
+    expect(messages.first.senderName, 'Peer');
+    expect(messages.last.senderName, 'Current user');
+    expect(messages.last.status, isEmpty);
+
+    await expectLater(
+      repository.sendTextMessage(
+        conversationId: 'S:1_2',
+        senderProfileId: '1',
+        text: 'not written',
+      ),
+      throwsA(isA<UnsupportedError>()),
     );
   });
 

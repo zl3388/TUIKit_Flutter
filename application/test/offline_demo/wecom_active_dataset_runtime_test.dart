@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'wecom_identity_test_fixture.dart';
+import 'wecom_message_test_fixture.dart';
 
 void main() {
   late Directory temporaryDirectory;
@@ -119,6 +120,10 @@ void main() {
     expect(
       (await runtime.conversations.listConversations()).single.displayName,
       'Base room',
+    );
+    expect(
+      (await runtime.messages.listConversationMessages(1)).single.messageId,
+      1,
     );
     final profile = await runtime.identity.currentProfile();
     expect(profile.displayName, 'Base contact');
@@ -312,6 +317,33 @@ Future<WeComImportedPackage> _importPackage(
     );
   }
   await _createSessionDatabase(source, conversationName);
+  await createMessageDatabases(
+    source,
+    conversationNumericId: 1,
+    messages: const [
+      TestWeComMessage(
+        messageId: 1,
+        serverId: 1,
+        sequence: 1,
+        senderId: 1,
+        conversationId: 'R:1',
+        sendTime: 100,
+        content: [
+          0x0a,
+          0x09,
+          0x08,
+          0x00,
+          0x12,
+          0x05,
+          0x0a,
+          0x03,
+          0xe5,
+          0x86,
+          0x8d,
+        ],
+      ),
+    ],
+  );
   return importer.importPackage(
     sourceDirectory: source,
     destinationRoot: Directory(p.join(root.path, 'imports')),
@@ -426,6 +458,7 @@ WeComPackageContract _contract() {
         },
         indexes: const {},
       ),
+      ...messageDatabaseContracts(),
     ],
   );
 }

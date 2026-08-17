@@ -1,8 +1,10 @@
 import '../domain/models.dart';
 import '../domain/repositories.dart';
 import '../domain/wecom_conversation_models.dart';
+import '../domain/wecom_message_models.dart';
 import 'wecom_conversation_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
+import 'wecom_message_repository.dart';
 import 'wecom_overlay_command_service.dart';
 
 class WeComOfflineConversationRepository implements ConversationRepository {
@@ -10,9 +12,11 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     required this.datasetId,
     required this.currentUserId,
     required WeComMergedConversationRepository conversations,
+    required WeComMessageRepository messages,
     required ContactRepository contacts,
     required WeComOverlayCommandService commands,
   })  : _conversations = conversations,
+        _messages = messages,
         _contacts = contacts,
         _commands = commands;
 
@@ -22,6 +26,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   final String datasetId;
   final int currentUserId;
   final WeComMergedConversationRepository _conversations;
+  final WeComMessageRepository _messages;
   final ContactRepository _contacts;
   final WeComOverlayCommandService _commands;
 
@@ -31,6 +36,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   @override
   Set<ConversationFeature> get features => const {
         ConversationFeature.members,
+        ConversationFeature.messages,
         ConversationFeature.pin,
         ConversationFeature.mute,
       };
@@ -39,26 +45,30 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   Future<List<OfflineConversation>> listConversations() async {
     final summaries = await _listAllSummaries();
     final drafts = await _conversations.listConversationDraftTexts();
+    final lastMessages = await _messages.findMessagesById(
+      summaries.map((summary) => summary.lastMessageId).whereType<int>(),
+    );
     final contacts = await _contacts.listContacts();
     final contactsById = <String, DirectoryContact>{
       for (final contact in contacts) contact.id: contact,
     };
-    final mapped = summaries
-        .map(
-          (summary) => OfflineConversation(
-            id: summary.id,
-            type: _conversationType(summary.id),
-            title: _conversationTitle(summary, contactsById),
-            avatarPath: null,
-            lastMessagePreview: '',
-            lastMessageAt: _unixSeconds(summary.lastMessageTime),
-            draftText: drafts[summary.id] ?? '',
-            unreadCount: summary.unreadState?.unreadCount ?? 0,
-            isPinned: summary.pinnedFlag == 1,
-            isMuted: summary.blockedFlag == 1,
-          ),
-        )
-        .toList(growable: false);
+    final mapped = summaries.map((summary) {
+      final lastMessage = lastMessages[summary.lastMessageId];
+      return OfflineConversation(
+        id: summary.id,
+        type: _conversationType(summary.id),
+        title: _conversationTitle(summary, contactsById),
+        avatarPath: null,
+        lastMessagePreview: _messageText(
+          lastMessage?.conversationId == summary.id ? lastMessage : null,
+        ),
+        lastMessageAt: _unixSeconds(summary.lastMessageTime),
+        draftText: drafts[summary.id] ?? '',
+        unreadCount: summary.unreadState?.unreadCount ?? 0,
+        isPinned: summary.pinnedFlag == 1,
+        isMuted: summary.blockedFlag == 1,
+      );
+    }).toList(growable: false);
 
     return List<OfflineConversation>.unmodifiable([
       ...mapped.where((conversation) => conversation.isPinned),
@@ -124,8 +134,34 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<List<OfflineMessage>> listMessages(String conversationId) {
-    return _notMapped('Message history');
+  Future<List<OfflineMessage>> listMessages(String conversationId) async {
+    final summary = await _findSummary(conversationId);
+    final messages = await _messages.listConversationMessages(
+      summary.numericId,
+    );
+    final contacts = await _contacts.listContacts();
+    final contactsById = <String, DirectoryContact>{
+      for (final contact in contacts) contact.id: contact,
+    };
+    return messages
+        .where((message) => message.conversationId == conversationId)
+        .map((message) {
+      final senderId = message.senderId.toString();
+      return OfflineMessage(
+        id: message.messageId.toString(),
+        conversationId: message.conversationId,
+        senderProfileId: senderId,
+        senderName: contactsById[senderId]?.displayName ?? senderId,
+        kind: message.contentType == 2 ? 'text' : 'unsupported',
+        text: _messageText(message),
+        sentAt: DateTime.fromMillisecondsSinceEpoch(
+          message.sendTime * 1000,
+          isUtc: true,
+        ),
+        status: '',
+        isRecalled: false,
+      );
+    }).toList(growable: false);
   }
 
   @override
@@ -244,6 +280,25 @@ class WeComOfflineConversationRepository implements ConversationRepository {
 
   String? _nonEmpty(String? value) {
     return value == null || value.isEmpty ? null : value;
+  }
+
+  String _messageText(WeComMessageRecord? message) {
+    if (message == null) {
+      return '';
+    }
+    if (message.contentType != 2) {
+      return '[非文本消息]';
+    }
+    final content = message.content;
+    if (content == null) {
+      return '[文本消息]';
+    }
+    try {
+      final text = decodeWeComTextMessage(content);
+      return text.isEmpty ? '[文本消息]' : text;
+    } on FormatException {
+      return '[无法解析的文本消息]';
+    }
   }
 
   Future<T> _notMapped<T>(String feature) {
