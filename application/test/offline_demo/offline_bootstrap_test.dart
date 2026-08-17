@@ -248,6 +248,12 @@ CREATE TABLE conversation_user_table (
   PRIMARY KEY (conversation_id, user_id)
 )
 ''');
+  await database.execute('''
+CREATE TABLE draft_table_1 (
+  conversation_id TEXT DEFAULT '' PRIMARY KEY,
+  content
+)
+''');
   await database.insert('conversation_table', {
     'con_numeric_id': 1,
     'id': 'R:example',
@@ -327,6 +333,14 @@ WeComPackageContract _contract() {
             testColumn('gag_type', 'INTEGER', notNull: true),
             testColumn('nick_name', 'TEXT'),
             testColumn('is_admin', 'INTEGER'),
+          ],
+          'draft_table_1': [
+            testColumn(
+              'conversation_id',
+              'TEXT',
+              primaryKeyPosition: 1,
+            ),
+            testColumn('content', ''),
           ],
         },
         indexes: const {},

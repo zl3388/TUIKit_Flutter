@@ -38,6 +38,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   @override
   Future<List<OfflineConversation>> listConversations() async {
     final summaries = await _listAllSummaries();
+    final drafts = await _conversations.listConversationDraftTexts();
     final contacts = await _contacts.listContacts();
     final contactsById = <String, DirectoryContact>{
       for (final contact in contacts) contact.id: contact,
@@ -51,7 +52,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
             avatarPath: null,
             lastMessagePreview: '',
             lastMessageAt: _unixSeconds(summary.lastMessageTime),
-            draftText: '',
+            draftText: drafts[summary.id] ?? '',
             unreadCount: summary.unreadState?.unreadCount ?? 0,
             isPinned: summary.pinnedFlag == 1,
             isMuted: summary.blockedFlag == 1,

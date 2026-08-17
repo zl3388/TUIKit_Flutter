@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
@@ -87,6 +88,7 @@ void main() {
     expect(conversations.last.title, 'Peer');
     expect(conversations.last.unreadCount, 3);
     expect(conversations.last.isMuted, isTrue);
+    expect(conversations.last.draftText, '111');
     expect(
       conversations.last.lastMessageAt,
       DateTime.fromMillisecondsSinceEpoch(200000, isUtc: true),
@@ -204,6 +206,12 @@ CREATE TABLE conversation_user_table (
   PRIMARY KEY (conversation_id, user_id)
 )
 ''');
+  await database.execute('''
+CREATE TABLE draft_table_1 (
+  conversation_id TEXT DEFAULT '' PRIMARY KEY,
+  content
+)
+''');
   await database.insert('conversation_table', {
     'con_numeric_id': 1,
     'id': 'S:1_2',
@@ -234,6 +242,12 @@ CREATE TABLE conversation_user_table (
     'gag_type': 2,
     'nick_name': 'Peer nick',
     'is_admin': 1,
+  });
+  await database.insert('draft_table_1', {
+    'conversation_id': 'S:1_2',
+    'content': base64Decode(
+      'CiUIAhIfCh0IABIZChcKFTExMQAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    ),
   });
   await database.close();
 }

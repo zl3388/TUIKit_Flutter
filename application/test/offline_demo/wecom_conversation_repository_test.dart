@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,6 +74,21 @@ void main() {
     expect(members.last.adminFlag, 3);
   });
 
+  test('decodes verified legacy and composite draft text read-only', () async {
+    final database = await _openFixture(databasePath);
+    addTearDown(database.close);
+    final repository = WeComConversationRepository(database);
+
+    final drafts = await repository.listConversationDraftTexts();
+
+    expect(drafts['R:remark'], '111');
+    expect(
+      drafts['R:name'],
+      'Hello，正确密码是：654321\n[嘿哈][抠鼻][捂脸]\n',
+    );
+    expect(drafts, isNot(contains('S:blank')));
+  });
+
   test('rejects conversation pagination outside the bounded query contract',
       () async {
     final database = await _openFixture(databasePath);
@@ -138,6 +154,12 @@ CREATE TABLE conversation_user_table (
   nick_name TEXT DEFAULT '',
   is_admin INTEGER DEFAULT 0,
   PRIMARY KEY (conversation_id, user_id)
+)
+''');
+        await database.execute('''
+CREATE TABLE draft_table_1 (
+  conversation_id TEXT DEFAULT '' PRIMARY KEY,
+  content
 )
 ''');
         await _seedFixture(database);
@@ -209,5 +231,28 @@ Future<void> _seedFixture(Database database) async {
     'nick_name': null,
     'is_admin': null,
   });
+  batch.insert('draft_table_1', {
+    'conversation_id': 'R:remark',
+    'content': _hexBytes(
+      '0A250802121F0A1D080012190A170A153131310000000000000000000000000000000000000000',
+    ),
+  });
+  batch.insert('draft_table_1', {
+    'conversation_id': 'R:name',
+    'content': _hexBytes(
+      '0a740802100022002a620a27080012230a2148656c6c6fefbc8ce6ada3e7a1aee5af86e7a081e698afefbc9a3635343332310a0a0e0803120a0a085be598bfe593885d0a0e0803120a0a085be68aa0e9bcbb5d0a0e0803120a0a085be68d82e884b85d0a07080012030a010a30004a005000580062000a610807100022002a4f121532303133313231333033343333383137322e6a706728c10230dc01a2062f443a5c446174615c55736572446174615c50696374757265735c32303133313231333033343333383137322e6a706730004a0050005800620010001a0022002a00',
+    ),
+  });
+  batch.insert('draft_table_1', {
+    'conversation_id': 'S:blank',
+    'content': Uint8List.fromList([0xff]),
+  });
   await batch.commit(noResult: true);
+}
+
+Uint8List _hexBytes(String source) {
+  return Uint8List.fromList([
+    for (var offset = 0; offset < source.length; offset += 2)
+      int.parse(source.substring(offset, offset + 2), radix: 16),
+  ]);
 }

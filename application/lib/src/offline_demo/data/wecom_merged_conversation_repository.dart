@@ -183,6 +183,10 @@ class WeComMergedConversationRepository {
     return List<WeComConversationMember>.unmodifiable(members);
   }
 
+  Future<Map<String, String>> listConversationDraftTexts() {
+    return _baseRepository.listConversationDraftTexts();
+  }
+
   Future<List<WeComConversationSummary>> _readAllBaseConversations() async {
     final conversations = <WeComConversationSummary>[];
     var offset = 0;
