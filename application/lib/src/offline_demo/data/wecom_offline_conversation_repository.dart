@@ -4,6 +4,7 @@ import '../domain/wecom_conversation_models.dart';
 import '../domain/wecom_message_models.dart';
 import 'wecom_conversation_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
+import 'wecom_message_content_decoder.dart';
 import 'wecom_message_repository.dart';
 import 'wecom_overlay_command_service.dart';
 
@@ -59,9 +60,9 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         type: _conversationType(summary.id),
         title: _conversationTitle(summary, contactsById),
         avatarPath: null,
-        lastMessagePreview: _messageText(
+        lastMessagePreview: _messageContent(
           lastMessage?.conversationId == summary.id ? lastMessage : null,
-        ),
+        ).text,
         lastMessageAt: _unixSeconds(summary.lastMessageTime),
         draftText: drafts[summary.id] ?? '',
         unreadCount: summary.unreadState?.unreadCount ?? 0,
@@ -147,13 +148,14 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         .where((message) => message.conversationId == conversationId)
         .map((message) {
       final senderId = message.senderId.toString();
+      final content = _messageContent(message);
       return OfflineMessage(
         id: message.messageId.toString(),
         conversationId: message.conversationId,
         senderProfileId: senderId,
         senderName: contactsById[senderId]?.displayName ?? senderId,
-        kind: message.contentType == 2 ? 'text' : 'unsupported',
-        text: _messageText(message),
+        kind: content.kind,
+        text: content.text,
         sentAt: DateTime.fromMillisecondsSinceEpoch(
           message.sendTime * 1000,
           isUtc: true,
@@ -282,22 +284,17 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     return value == null || value.isEmpty ? null : value;
   }
 
-  String _messageText(WeComMessageRecord? message) {
+  WeComDecodedMessageContent _messageContent(WeComMessageRecord? message) {
     if (message == null) {
-      return '';
-    }
-    if (message.contentType != 2) {
-      return '[非文本消息]';
-    }
-    final content = message.content;
-    if (content == null) {
-      return '[文本消息]';
+      return const WeComDecodedMessageContent(kind: 'unsupported', text: '');
     }
     try {
-      final text = decodeWeComTextMessage(content);
-      return text.isEmpty ? '[文本消息]' : text;
+      return decodeWeComMessageContent(message.contentType, message.content);
     } on FormatException {
-      return '[无法解析的文本消息]';
+      return const WeComDecodedMessageContent(
+        kind: 'unsupported',
+        text: '[无法解析的消息]',
+      );
     }
   }
 

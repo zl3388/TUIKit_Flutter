@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:application/src/offline_demo/data/wecom_message_content_decoder.dart';
 import 'package:application/src/offline_demo/data/wecom_message_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -134,6 +136,149 @@ void main() {
 
     expect(decodeWeComTextMessage(content), '再[微笑]');
   });
+
+  test('maps confirmed extended types without exposing sensitive fields', () {
+    final cases = <({int type, Uint8List content, String kind, String text})>[
+      (
+        type: 4,
+        content: _message([
+          _bytesField(1, const []),
+          _bytesField(1, const []),
+          _stringField(2, 'Group'),
+        ]),
+        kind: 'image',
+        text: '[图片] 2 张 · Group',
+      ),
+      (
+        type: 6,
+        content: _message([
+          _doubleField(1, 121.25),
+          _doubleField(2, 31.35),
+          _stringField(3, 'Test address'),
+        ]),
+        kind: 'location',
+        text: '[位置] Test address',
+      ),
+      (
+        type: 7,
+        content: _message([
+          _stringField(3, 'https://private.invalid/image'),
+          _varintField(4, 2048),
+          _varintField(5, 640),
+          _varintField(6, 480),
+          _stringField(100, r'C:\private\image.png'),
+        ]),
+        kind: 'image',
+        text: '[图片] 640×480 · 2.0 KB',
+      ),
+      (
+        type: 14,
+        content: _message([
+          _stringField(8, 'private-md5'),
+          _varintField(5, 128),
+          _varintField(6, 128),
+        ]),
+        kind: 'emoji',
+        text: '[表情] 128×128',
+      ),
+      (
+        type: 15,
+        content: _message([
+          _stringField(2, 'report.pdf'),
+          _varintField(4, 2048),
+          _stringField(13, 'private-p2p-key'),
+        ]),
+        kind: 'file',
+        text: '[文件] report.pdf · 2.0 KB',
+      ),
+      (
+        type: 16,
+        content: _message([
+          _stringField(2, 'voice.silk'),
+          _varintField(7, 12),
+        ]),
+        kind: 'voice',
+        text: '[语音] 12 秒',
+      ),
+      (
+        type: 20,
+        content: _message([
+          _stringField(1, 'private-encrypted-content'),
+          _stringField(2, 'archive.zip'),
+          _varintField(4, 4096),
+        ]),
+        kind: 'file',
+        text: '[文件] archive.zip · 4.0 KB',
+      ),
+      for (final type in const [22, 23])
+        (
+          type: type,
+          content: _message([
+            _stringField(1, '/private/video.mp4'),
+            _varintField(3, 1024 * 1024),
+            _varintField(4, 30),
+            _varintField(5, 1920),
+            _varintField(6, 1080),
+            _stringField(7, 'https://private.invalid/video'),
+          ]),
+          kind: 'video',
+          text: '[视频] 30 秒 · 1920×1080 · 1.0 MB',
+        ),
+      (
+        type: 40,
+        content: _message([
+          _stringField(3, '对方已取消'),
+          _stringField(5, 'private-call-id'),
+          _varintField(20, 33),
+        ]),
+        kind: 'call',
+        text: '[通话] 对方已取消 · 33 秒',
+      ),
+      (
+        type: 123,
+        content: _message([
+          _bytesField(
+            1,
+            _message([
+              _varintField(5, 14),
+              _bytesField(103, _message([_stringField(2, 'image.png')])),
+            ]),
+          ),
+          _bytesField(
+            1,
+            _message([
+              _varintField(5, 2),
+              _bytesField(101, _textMessage('说明')),
+            ]),
+          ),
+        ]),
+        kind: 'mixed',
+        text: '[图文消息] image.png · 说明',
+      ),
+      for (final type in const [1001, 1002, 1011])
+        (
+          type: type,
+          content: Uint8List.fromList(utf8.encode('原始文本')),
+          kind: 'text',
+          text: '原始文本',
+        ),
+    ];
+
+    for (final item in cases) {
+      final decoded = decodeWeComMessageContent(item.type, item.content);
+      expect(decoded.kind, item.kind, reason: 'content_type=${item.type}');
+      expect(decoded.text, item.text, reason: 'content_type=${item.type}');
+      expect(decoded.text, isNot(contains('private-')));
+    }
+    expect(
+      decodeWeComMessageContent(999, Uint8List(0)).text,
+      '[非文本消息]',
+    );
+    expect(
+      () => decodeWeComMessageContent(7, Uint8List.fromList([0x1a, 0x02])),
+      throwsFormatException,
+    );
+  });
 }
 
 Uint8List _bytes(String hex) {
@@ -141,4 +286,50 @@ Uint8List _bytes(String hex) {
     for (var index = 0; index < hex.length; index += 2)
       int.parse(hex.substring(index, index + 2), radix: 16),
   ]);
+}
+
+Uint8List _message(List<List<int>> fields) {
+  return Uint8List.fromList([for (final field in fields) ...field]);
+}
+
+List<int> _varintField(int number, int value) => [
+      ..._varint(number << 3),
+      ..._varint(value),
+    ];
+
+List<int> _bytesField(int number, List<int> value) => [
+      ..._varint((number << 3) | 2),
+      ..._varint(value.length),
+      ...value,
+    ];
+
+List<int> _stringField(int number, String value) =>
+    _bytesField(number, utf8.encode(value));
+
+List<int> _doubleField(int number, double value) {
+  final bytes = ByteData(8)..setFloat64(0, value, Endian.little);
+  return [..._varint((number << 3) | 1), ...bytes.buffer.asUint8List()];
+}
+
+List<int> _textMessage(String text) => _message([
+      _bytesField(
+        1,
+        _message([
+          _varintField(1, 0),
+          _bytesField(2, _message([_stringField(1, text)])),
+        ]),
+      ),
+    ]);
+
+List<int> _varint(int value) {
+  final bytes = <int>[];
+  do {
+    var byte = value & 0x7f;
+    value >>= 7;
+    if (value != 0) {
+      byte |= 0x80;
+    }
+    bytes.add(byte);
+  } while (value != 0);
+  return bytes;
 }

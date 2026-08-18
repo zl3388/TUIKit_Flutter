@@ -16,6 +16,7 @@ class TestWeComMessage {
     required this.conversationId,
     required this.sendTime,
     required this.content,
+    this.contentType = 2,
     this.flag = 0,
   });
 
@@ -25,6 +26,7 @@ class TestWeComMessage {
   final int senderId;
   final String conversationId;
   final int sendTime;
+  final int contentType;
   final int flag;
   final List<int> content;
 }
@@ -58,7 +60,7 @@ CREATE TABLE message_table (
       'sequence': message.sequence,
       'sender_id': message.senderId,
       'conversation_id': message.conversationId,
-      'content_type': 2,
+      'content_type': message.contentType,
       'send_time': message.sendTime,
       'flag': message.flag,
       'content': Uint8List.fromList(message.content),

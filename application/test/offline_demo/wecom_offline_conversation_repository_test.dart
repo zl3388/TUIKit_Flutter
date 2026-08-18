@@ -65,6 +65,38 @@ void main() {
           ],
         ),
         TestWeComMessage(
+          messageId: 3,
+          serverId: 103,
+          sequence: 30,
+          senderId: 2,
+          conversationId: 'S:1_2',
+          contentType: 40,
+          sendTime: 30,
+          content: [
+            0x08,
+            0x02,
+            0x10,
+            0x03,
+            0x1a,
+            0x0f,
+            0xe5,
+            0xaf,
+            0xb9,
+            0xe6,
+            0x96,
+            0xb9,
+            0xe5,
+            0xb7,
+            0xb2,
+            0xe5,
+            0x8f,
+            0x96,
+            0xe6,
+            0xb6,
+            0x88,
+          ],
+        ),
+        TestWeComMessage(
           messageId: 2,
           serverId: 102,
           sequence: 20,
@@ -161,10 +193,10 @@ void main() {
     expect(conversations.last.unreadCount, 3);
     expect(conversations.last.isMuted, isTrue);
     expect(conversations.last.draftText, '111');
-    expect(conversations.last.lastMessagePreview, '好的');
+    expect(conversations.last.lastMessagePreview, '[通话] 对方已取消');
     expect(
       conversations.last.lastMessageAt,
-      DateTime.fromMillisecondsSinceEpoch(200000, isUtc: true),
+      DateTime.fromMillisecondsSinceEpoch(30000, isUtc: true),
     );
 
     final members = await repository.listMembers('S:1_2');
@@ -180,9 +212,14 @@ void main() {
     );
 
     final messages = await repository.listMessages('S:1_2');
-    expect(messages.map((message) => message.text), ['再', '好的']);
+    expect(
+      messages.map((message) => message.text),
+      ['再', '好的', '[通话] 对方已取消'],
+    );
+    expect(messages.map((message) => message.kind), ['text', 'text', 'call']);
     expect(messages.first.senderName, 'Peer');
-    expect(messages.last.senderName, 'Current user');
+    expect(messages[1].senderName, 'Current user');
+    expect(messages.last.senderName, 'Peer');
     expect(messages.last.status, isEmpty);
 
     await expectLater(
@@ -305,8 +342,8 @@ CREATE TABLE draft_table_1 (
     'id': 'S:1_2',
     'name': '',
     'is_sticked': 0,
-    'last_message_time': 200,
-    'last_message_id': 2,
+    'last_message_time': 30,
+    'last_message_id': 3,
     'is_blocked': 1,
   });
   await database.insert('conversation_table', {

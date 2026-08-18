@@ -1,9 +1,6 @@
-import 'dart:typed_data';
-
 import 'package:sqflite/sqflite.dart';
 
 import '../domain/wecom_message_models.dart';
-import 'wecom_protobuf_reader.dart';
 
 class WeComMessageRepository {
   const WeComMessageRepository({
@@ -76,23 +73,4 @@ WHERE message_id IN ($placeholders)
     }
     return Map<int, WeComMessageRecord>.unmodifiable(messages);
   }
-}
-
-String decodeWeComTextMessage(Uint8List content) {
-  final buffer = StringBuffer();
-  for (final field in readWeComProtoFields(content)) {
-    if (field.number != 1 || field.bytes == null) {
-      continue;
-    }
-    final item = readWeComProtoFields(field.bytes!);
-    final itemType = firstWeComProtoVarint(item, 1);
-    if (itemType != 0 && itemType != 3) {
-      continue;
-    }
-    final payload = firstWeComProtoBytes(item, 2);
-    if (payload != null) {
-      buffer.write(decodeWeComNestedText(payload));
-    }
-  }
-  return buffer.toString();
 }

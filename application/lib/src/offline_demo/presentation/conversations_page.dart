@@ -832,7 +832,7 @@ class _MessageBubble extends StatelessWidget {
                           : const Color(0xFFE2E8E7),
                     ),
                   ),
-                  child: Text(message.text),
+                  child: _MessageContent(message: message),
                 ),
                 const SizedBox(height: 3),
                 Row(
@@ -859,6 +859,39 @@ class _MessageBubble extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MessageContent extends StatelessWidget {
+  const _MessageContent({required this.message});
+
+  final OfflineMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = switch (message.kind) {
+      'image' => Icons.image_outlined,
+      'location' => Icons.location_on_outlined,
+      'emoji' => Icons.emoji_emotions_outlined,
+      'file' => Icons.insert_drive_file_outlined,
+      'voice' => Icons.mic_none_rounded,
+      'video' => Icons.videocam_outlined,
+      'call' => Icons.call_outlined,
+      'mixed' => Icons.dashboard_customize_outlined,
+      'unsupported' => Icons.help_outline_rounded,
+      _ => null,
+    };
+    if (icon == null) {
+      return Text(message.text);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 18, color: const Color(0xFF506168)),
+        const SizedBox(width: 7),
+        Flexible(child: Text(message.text)),
+      ],
     );
   }
 }

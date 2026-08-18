@@ -51,6 +51,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('已读取消息'), findsOneWidget);
+    expect(find.text('[文件] report.pdf · 2.0 KB'), findsOneWidget);
+    expect(find.byIcon(Icons.insert_drive_file_outlined), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
     expect(find.byTooltip('发送'), findsNothing);
   });
@@ -89,6 +91,17 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
           kind: 'text',
           text: '已读取消息',
           sentAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
+          status: '',
+          isRecalled: false,
+        ),
+        OfflineMessage(
+          id: '2',
+          conversationId: conversationId,
+          senderProfileId: '2',
+          senderName: 'Peer',
+          kind: 'file',
+          text: '[文件] report.pdf · 2.0 KB',
+          sentAt: DateTime.fromMillisecondsSinceEpoch(2000, isUtc: true),
           status: '',
           isRecalled: false,
         ),
