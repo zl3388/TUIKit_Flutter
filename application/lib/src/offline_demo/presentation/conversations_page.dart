@@ -135,7 +135,8 @@ class _ConversationsPageState extends State<ConversationsPage> {
           _WorkspaceSummary(
             profile: profile,
             unreadConversations: store.unreadConversationCount,
-            unreadNotifications: store.unreadNotificationCount,
+            unreadNotifications:
+                store.activityAvailable ? store.unreadNotificationCount : null,
           )
         else
           const _IdentityRequiredSummary(),
@@ -257,7 +258,7 @@ class _WorkspaceSummary extends StatelessWidget {
 
   final OfflineProfile profile;
   final int unreadConversations;
-  final int unreadNotifications;
+  final int? unreadNotifications;
 
   @override
   Widget build(BuildContext context) {
@@ -302,7 +303,7 @@ class _WorkspaceSummary extends StatelessWidget {
           ),
           _Metric(value: '$unreadConversations', label: '未读'),
           const SizedBox(width: 14),
-          _Metric(value: '$unreadNotifications', label: '通知'),
+          _Metric(value: unreadNotifications?.toString() ?? '--', label: '通知'),
         ],
       ),
     );

@@ -1,41 +1,15 @@
-import 'dart:io';
-
-import 'package:application/src/offline_demo/data/offline_database.dart';
 import 'package:application/src/offline_demo/domain/models.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
 import 'package:application/src/offline_demo/presentation/conversations_page.dart';
 import 'package:application/src/offline_demo/state/offline_demo_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:path/path.dart' as p;
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
-  late Directory temporaryDirectory;
-  late OfflineDatabase database;
-
-  setUpAll(sqfliteFfiInit);
-
-  setUp(() async {
-    temporaryDirectory = await Directory.systemTemp.createTemp(
-      'tui_conversation_page_',
-    );
-    database = await OfflineDatabase.open(
-      factory: databaseFactoryFfi,
-      databasePath: p.join(temporaryDirectory.path, 'offline.db'),
-    );
-  });
-
-  tearDown(() async {
-    await database.close();
-    await temporaryDirectory.delete(recursive: true);
-  });
-
   testWidgets('read-only message history does not expose a composer',
       (tester) async {
     final store = OfflineDemoStore(
       OfflineRepositoryBundle(
-        database,
         conversationRepository: const _ReadOnlyMessageRepository(),
       ),
     );

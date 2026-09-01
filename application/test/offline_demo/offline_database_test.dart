@@ -26,7 +26,7 @@ void main() {
     }
   });
 
-  test('current schema creates all core tables and deterministic seed data',
+  test('legacy schema creates all prototype tables and deterministic seed data',
       () async {
     final database = await OfflineDatabase.open(
       factory: databaseFactoryFfi,
@@ -41,7 +41,7 @@ void main() {
     expect(tableNames, containsAll(OfflineSchema.expectedTables));
     expect(await database.connection.getVersion(), OfflineSchema.version);
 
-    final repositories = OfflineRepositoryBundle(database);
+    final repositories = OfflineRepositoryBundle.fromLegacyDatabase(database);
     final profile = await repositories.identity.currentProfile();
     final contacts = await repositories.contacts.listContacts();
     final conversations = await repositories.conversations.listConversations();
@@ -84,7 +84,7 @@ void main() {
     );
     addTearDown(database.close);
 
-    final repositories = OfflineRepositoryBundle(database);
+    final repositories = OfflineRepositoryBundle.fromLegacyDatabase(database);
     final profile = await repositories.identity.currentProfile();
     final profileCount = Sqflite.firstIntValue(
       await database.connection.rawQuery('SELECT COUNT(*) FROM profiles'),
@@ -139,7 +139,7 @@ void main() {
       }
     });
 
-    var repositories = OfflineRepositoryBundle(database);
+    var repositories = OfflineRepositoryBundle.fromLegacyDatabase(database);
     await repositories.conversations.saveDraft(
       'conversation_product',
       '发送前草稿',
@@ -168,7 +168,7 @@ void main() {
       factory: databaseFactoryFfi,
       databasePath: databasePath,
     );
-    repositories = OfflineRepositoryBundle(database);
+    repositories = OfflineRepositoryBundle.fromLegacyDatabase(database);
 
     final reopenedMessages = await repositories.conversations.listMessages(
       'conversation_product',
@@ -188,7 +188,7 @@ void main() {
       databasePath: databasePath,
     );
     addTearDown(database.close);
-    final repositories = OfflineRepositoryBundle(database);
+    final repositories = OfflineRepositoryBundle.fromLegacyDatabase(database);
     final before = Sqflite.firstIntValue(
       await database.connection.rawQuery('SELECT COUNT(*) FROM messages'),
     );
@@ -229,7 +229,7 @@ void main() {
       'PRAGMA table_info(conversations)',
     );
     final columnNames = columns.map((row) => row['name']).toSet();
-    final repositories = OfflineRepositoryBundle(database);
+    final repositories = OfflineRepositoryBundle.fromLegacyDatabase(database);
     final conversations = await repositories.conversations.listConversations();
 
     expect(await database.connection.getVersion(), 2);
@@ -245,7 +245,7 @@ void main() {
       databasePath: databasePath,
     );
     addTearDown(database.close);
-    final repositories = OfflineRepositoryBundle(database);
+    final repositories = OfflineRepositoryBundle.fromLegacyDatabase(database);
 
     await repositories.conversations.setPinned('conversation_product', false);
     await repositories.conversations.setMuted('conversation_product', true);

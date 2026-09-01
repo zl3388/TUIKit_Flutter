@@ -6,7 +6,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../data/local_media_store.dart';
-import '../data/offline_database.dart';
 import '../data/wecom_active_dataset_runtime.dart';
 import '../data/wecom_contact_repository.dart';
 import '../data/wecom_database_package.dart';
@@ -18,7 +17,6 @@ import '../state/offline_demo_store.dart';
 
 class OfflineEnvironment {
   OfflineEnvironment({
-    required this.database,
     required this.mediaStore,
     required this.repositories,
     required this.store,
@@ -27,7 +25,6 @@ class OfflineEnvironment {
     this.wecomRuntime,
   });
 
-  final OfflineDatabase database;
   final LocalMediaStore mediaStore;
   final OfflineRepositoryBundle repositories;
   final OfflineDemoStore store;
@@ -45,11 +42,7 @@ class OfflineEnvironment {
     try {
       await wecomRuntime?.close();
     } finally {
-      try {
-        await wecomOverlayDatabase.close();
-      } finally {
-        await database.close();
-      }
+      await wecomOverlayDatabase.close();
     }
   }
 }
@@ -61,16 +54,11 @@ abstract final class OfflineBootstrap {
 
   static Future<OfflineEnvironment> create({
     DatabaseFactory? factory,
-    String? databasePath,
     Directory? mediaRootDirectory,
     Directory? wecomRootDirectory,
     WeComPackageContract? wecomContract,
   }) async {
     final resolvedFactory = factory ?? databaseFactory;
-    final database = await OfflineDatabase.open(
-      factory: resolvedFactory,
-      databasePath: databasePath,
-    );
     WeComOverlayDatabase? overlayDatabase;
     WeComActiveDatasetRuntime? runtime;
     try {
@@ -129,7 +117,6 @@ abstract final class OfflineBootstrap {
       }
 
       final repositories = OfflineRepositoryBundle(
-        database,
         identityRepository: identityRepository,
         contactRepository: contactRepository,
         conversationRepository: conversationRepository,
@@ -137,7 +124,6 @@ abstract final class OfflineBootstrap {
       final store = OfflineDemoStore(repositories);
       await store.load();
       return OfflineEnvironment(
-        database: database,
         mediaStore: mediaStore,
         repositories: repositories,
         store: store,
@@ -149,11 +135,7 @@ abstract final class OfflineBootstrap {
       try {
         await runtime?.close();
       } finally {
-        try {
-          await overlayDatabase?.close();
-        } finally {
-          await database.close();
-        }
+        await overlayDatabase?.close();
       }
       rethrow;
     }

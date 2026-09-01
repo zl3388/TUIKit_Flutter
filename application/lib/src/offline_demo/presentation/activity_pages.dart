@@ -17,45 +17,59 @@ class NotificationsPage extends StatelessWidget {
       animation: store,
       builder: (context, _) => Scaffold(
         appBar: AppBar(title: const Text('通知中心')),
-        body: ListView.separated(
-          itemCount: store.notifications.length,
-          separatorBuilder: (context, index) => const Divider(indent: 64),
-          itemBuilder: (context, index) {
-            final notification = store.notifications[index];
-            return Material(
-              color:
-                  notification.isRead ? Colors.white : const Color(0xFFF2FAF8),
-              child: ListTile(
-                onTap: notification.isRead
-                    ? null
-                    : () => store.markNotificationRead(notification.id),
-                leading: Icon(
-                  _notificationIcon(notification.category),
-                  color: notification.isRead
-                      ? const Color(0xFF7A878D)
-                      : OfflineTheme.primary,
-                ),
-                title: Text(
-                  notification.title,
-                  style: TextStyle(
-                    fontWeight:
-                        notification.isRead ? FontWeight.w500 : FontWeight.w700,
+        body: !store.activityAvailable
+            ? const _ActivityState(
+                icon: Icons.notifications_none_rounded,
+                label: '通知数据尚未映射',
+              )
+            : store.notifications.isEmpty
+                ? const _ActivityState(
+                    icon: Icons.notifications_none_rounded,
+                    label: '暂无通知',
+                  )
+                : ListView.separated(
+                    itemCount: store.notifications.length,
+                    separatorBuilder: (context, index) =>
+                        const Divider(indent: 64),
+                    itemBuilder: (context, index) {
+                      final notification = store.notifications[index];
+                      return Material(
+                        color: notification.isRead
+                            ? Colors.white
+                            : const Color(0xFFF2FAF8),
+                        child: ListTile(
+                          onTap: notification.isRead
+                              ? null
+                              : () =>
+                                  store.markNotificationRead(notification.id),
+                          leading: Icon(
+                            _notificationIcon(notification.category),
+                            color: notification.isRead
+                                ? const Color(0xFF7A878D)
+                                : OfflineTheme.primary,
+                          ),
+                          title: Text(
+                            notification.title,
+                            style: TextStyle(
+                              fontWeight: notification.isRead
+                                  ? FontWeight.w500
+                                  : FontWeight.w700,
+                            ),
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '${notification.body}\n'
+                              '${formatDateTime(notification.occurredAt)}',
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          isThreeLine: true,
+                        ),
+                      );
+                    },
                   ),
-                ),
-                subtitle: Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    '${notification.body}\n'
-                    '${formatDateTime(notification.occurredAt)}',
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                isThreeLine: true,
-              ),
-            );
-          },
-        ),
       ),
     );
   }
@@ -70,44 +84,55 @@ class AnnouncementsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('企业公告')),
-      body: ListView.separated(
-        itemCount: store.announcements.length,
-        separatorBuilder: (context, index) => const Divider(indent: 64),
-        itemBuilder: (context, index) {
-          final announcement = store.announcements[index];
-          return Material(
-            color: Colors.white,
-            child: ListTile(
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (context) => AnnouncementDetailPage(
-                    announcement: announcement,
-                  ),
+      body: !store.activityAvailable
+          ? const _ActivityState(
+              icon: Icons.campaign_outlined,
+              label: '公告数据尚未映射',
+            )
+          : store.announcements.isEmpty
+              ? const _ActivityState(
+                  icon: Icons.campaign_outlined,
+                  label: '暂无公告',
+                )
+              : ListView.separated(
+                  itemCount: store.announcements.length,
+                  separatorBuilder: (context, index) =>
+                      const Divider(indent: 64),
+                  itemBuilder: (context, index) {
+                    final announcement = store.announcements[index];
+                    return Material(
+                      color: Colors.white,
+                      child: ListTile(
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (context) => AnnouncementDetailPage(
+                              announcement: announcement,
+                            ),
+                          ),
+                        ),
+                        leading: Icon(
+                          announcement.isPinned
+                              ? Icons.push_pin_rounded
+                              : Icons.article_outlined,
+                          color: announcement.isPinned
+                              ? OfflineTheme.accent
+                              : OfflineTheme.secondary,
+                        ),
+                        title: Text(
+                          announcement.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Text(
+                          '${announcement.authorName} · '
+                          '${formatDate(announcement.publishedAt)}',
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                      ),
+                    );
+                  },
                 ),
-              ),
-              leading: Icon(
-                announcement.isPinned
-                    ? Icons.push_pin_rounded
-                    : Icons.article_outlined,
-                color: announcement.isPinned
-                    ? OfflineTheme.accent
-                    : OfflineTheme.secondary,
-              ),
-              title: Text(
-                announcement.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                '${announcement.authorName} · '
-                '${formatDate(announcement.publishedAt)}',
-              ),
-              trailing: const Icon(Icons.chevron_right_rounded),
-            ),
-          );
-        },
-      ),
     );
   }
 }
@@ -158,43 +183,57 @@ class CallRecordsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('通话记录')),
-      body: ListView.separated(
-        itemCount: store.callRecords.length,
-        separatorBuilder: (context, index) => const Divider(indent: 76),
-        itemBuilder: (context, index) {
-          final record = store.callRecords[index];
-          final missed = record.status == 'missed';
-          final direction = record.direction == 'incoming' ? '呼入' : '呼出';
-          final duration = record.durationSeconds == 0
-              ? '未接通'
-              : formatDuration(record.durationSeconds);
-          return Material(
-            color: Colors.white,
-            child: ListTile(
-              leading: OfflineAvatar(
-                id: record.id,
-                label: record.peerName,
-                size: 44,
-              ),
-              title: Text(
-                record.peerName,
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: missed ? Theme.of(context).colorScheme.error : null,
+      body: !store.activityAvailable
+          ? const _ActivityState(
+              icon: Icons.call_outlined,
+              label: '通话数据尚未映射',
+            )
+          : store.callRecords.isEmpty
+              ? const _ActivityState(
+                  icon: Icons.call_outlined,
+                  label: '暂无通话记录',
+                )
+              : ListView.separated(
+                  itemCount: store.callRecords.length,
+                  separatorBuilder: (context, index) =>
+                      const Divider(indent: 76),
+                  itemBuilder: (context, index) {
+                    final record = store.callRecords[index];
+                    final missed = record.status == 'missed';
+                    final direction =
+                        record.direction == 'incoming' ? '呼入' : '呼出';
+                    final duration = record.durationSeconds == 0
+                        ? '未接通'
+                        : formatDuration(record.durationSeconds);
+                    return Material(
+                      color: Colors.white,
+                      child: ListTile(
+                        leading: OfflineAvatar(
+                          id: record.id,
+                          label: record.peerName,
+                          size: 44,
+                        ),
+                        title: Text(
+                          record.peerName,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: missed
+                                ? Theme.of(context).colorScheme.error
+                                : null,
+                          ),
+                        ),
+                        subtitle: Text(
+                          '$direction · $duration · ${formatDateTime(record.startedAt)}',
+                        ),
+                        trailing: Icon(
+                          record.type == 'video'
+                              ? Icons.videocam_outlined
+                              : Icons.call_outlined,
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              ),
-              subtitle: Text(
-                '$direction · $duration · ${formatDateTime(record.startedAt)}',
-              ),
-              trailing: Icon(
-                record.type == 'video'
-                    ? Icons.videocam_outlined
-                    : Icons.call_outlined,
-              ),
-            ),
-          );
-        },
-      ),
     );
   }
 }
@@ -211,10 +250,10 @@ class DataOverviewPage extends StatelessWidget {
       appBar: AppBar(title: const Text('数据概览')),
       body: ListView(
         children: [
-          const OfflineInfoTile(
-            icon: Icons.schema_outlined,
-            label: 'Schema',
-            value: 'v1',
+          OfflineInfoTile(
+            icon: Icons.storage_outlined,
+            label: '数据源',
+            value: environment.wecomRuntime == null ? '未选择' : 'WeCom 数据库包',
           ),
           OfflineInfoTile(
             icon: Icons.people_outline_rounded,
@@ -229,16 +268,41 @@ class DataOverviewPage extends StatelessWidget {
           OfflineInfoTile(
             icon: Icons.notifications_none_rounded,
             label: '通知',
-            value: '${store.notifications.length}',
-          ),
-          OfflineInfoTile(
-            icon: Icons.storage_outlined,
-            label: '数据库',
-            value: environment.database.path,
-            allowWrap: true,
+            value: store.activityAvailable
+                ? '${store.notifications.length}'
+                : '未映射',
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ActivityState extends StatelessWidget {
+  const _ActivityState({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.55,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 42, color: OfflineTheme.primary),
+                const SizedBox(height: 12),
+                Text(label, style: Theme.of(context).textTheme.titleMedium),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

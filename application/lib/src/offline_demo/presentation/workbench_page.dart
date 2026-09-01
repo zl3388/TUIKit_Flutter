@@ -98,44 +98,60 @@ class WorkbenchPage extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Card(
-              child: Column(
-                children: List.generate(store.announcements.length, (index) {
-                  final announcement = store.announcements[index];
-                  return Column(
-                    children: [
-                      ListTile(
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (context) => AnnouncementDetailPage(
-                              announcement: announcement,
-                            ),
+              child: !store.activityAvailable
+                  ? const ListTile(
+                      leading: Icon(Icons.campaign_outlined),
+                      title: Text('公告数据尚未映射'),
+                    )
+                  : store.announcements.isEmpty
+                      ? const ListTile(
+                          leading: Icon(Icons.campaign_outlined),
+                          title: Text('暂无公告'),
+                        )
+                      : Column(
+                          children: List.generate(
+                            store.announcements.length,
+                            (index) {
+                              final announcement = store.announcements[index];
+                              return Column(
+                                children: [
+                                  ListTile(
+                                    onTap: () => Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder: (context) =>
+                                            AnnouncementDetailPage(
+                                          announcement: announcement,
+                                        ),
+                                      ),
+                                    ),
+                                    leading: Icon(
+                                      announcement.isPinned
+                                          ? Icons.push_pin_rounded
+                                          : Icons.article_outlined,
+                                      color: announcement.isPinned
+                                          ? OfflineTheme.accent
+                                          : OfflineTheme.secondary,
+                                    ),
+                                    title: Text(
+                                      announcement.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(
+                                      '${announcement.authorName} · '
+                                      '${formatDate(announcement.publishedAt)}',
+                                    ),
+                                    trailing: const Icon(
+                                      Icons.chevron_right_rounded,
+                                    ),
+                                  ),
+                                  if (index != store.announcements.length - 1)
+                                    const Divider(indent: 56),
+                                ],
+                              );
+                            },
                           ),
                         ),
-                        leading: Icon(
-                          announcement.isPinned
-                              ? Icons.push_pin_rounded
-                              : Icons.article_outlined,
-                          color: announcement.isPinned
-                              ? OfflineTheme.accent
-                              : OfflineTheme.secondary,
-                        ),
-                        title: Text(
-                          announcement.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          '${announcement.authorName} · '
-                          '${formatDate(announcement.publishedAt)}',
-                        ),
-                        trailing: const Icon(Icons.chevron_right_rounded),
-                      ),
-                      if (index != store.announcements.length - 1)
-                        const Divider(indent: 56),
-                    ],
-                  );
-                }),
-              ),
             ),
           ],
         );

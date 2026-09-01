@@ -19,6 +19,7 @@ class OfflineDemoStore extends ChangeNotifier {
   bool get identityAvailable => repositories.identity.isAvailable;
   bool get contactsAvailable => repositories.contacts.isAvailable;
   bool get conversationsAvailable => repositories.conversations.isAvailable;
+  bool get activityAvailable => repositories.activity.isAvailable;
 
   bool supportsConversationFeature(ConversationFeature feature) {
     return repositories.conversations.features.contains(feature);

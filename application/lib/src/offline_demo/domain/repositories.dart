@@ -59,6 +59,8 @@ abstract interface class ConversationRepository {
 }
 
 abstract interface class ActivityRepository {
+  bool get isAvailable;
+
   Future<List<OfflineNotification>> listNotifications();
 
   Future<List<OfflineAnnouncement>> listAnnouncements();
@@ -69,18 +71,35 @@ abstract interface class ActivityRepository {
 }
 
 class OfflineRepositoryBundle {
-  OfflineRepositoryBundle(
+  OfflineRepositoryBundle({
+    IdentityRepository? identityRepository,
+    ContactRepository? contactRepository,
+    ConversationRepository? conversationRepository,
+    ActivityRepository? activityRepository,
+  })  : identity = identityRepository ?? const UnavailableIdentityRepository(),
+        contacts = contactRepository ?? const UnavailableContactRepository(),
+        conversations =
+            conversationRepository ?? const UnavailableConversationRepository(),
+        activity = activityRepository ?? const UnavailableActivityRepository();
+
+  factory OfflineRepositoryBundle.fromLegacyDatabase(
     OfflineDatabase database, {
     IdentityRepository? identityRepository,
     ContactRepository? contactRepository,
     ConversationRepository? conversationRepository,
-  })  : identity =
-            identityRepository ?? SqliteIdentityRepository(database.connection),
-        contacts =
-            contactRepository ?? SqliteContactRepository(database.connection),
-        conversations = conversationRepository ??
-            SqliteConversationRepository(database.connection),
-        activity = SqliteActivityRepository(database.connection);
+    ActivityRepository? activityRepository,
+  }) {
+    return OfflineRepositoryBundle(
+      identityRepository:
+          identityRepository ?? SqliteIdentityRepository(database.connection),
+      contactRepository:
+          contactRepository ?? SqliteContactRepository(database.connection),
+      conversationRepository: conversationRepository ??
+          SqliteConversationRepository(database.connection),
+      activityRepository:
+          activityRepository ?? SqliteActivityRepository(database.connection),
+    );
+  }
 
   final IdentityRepository identity;
   final ContactRepository contacts;
@@ -437,6 +456,9 @@ class SqliteActivityRepository implements ActivityRepository {
   final Database _db;
 
   @override
+  bool get isAvailable => true;
+
+  @override
   Future<List<OfflineNotification>> listNotifications() async {
     final rows = await _db.query(
       'notifications',
@@ -477,6 +499,29 @@ ORDER BY c.started_at DESC
       },
       where: 'id = ?',
       whereArgs: [notificationId],
+    );
+  }
+}
+
+class UnavailableActivityRepository implements ActivityRepository {
+  const UnavailableActivityRepository();
+
+  @override
+  bool get isAvailable => false;
+
+  @override
+  Future<List<OfflineNotification>> listNotifications() async => const [];
+
+  @override
+  Future<List<OfflineAnnouncement>> listAnnouncements() async => const [];
+
+  @override
+  Future<List<OfflineCallRecord>> listCallRecords() async => const [];
+
+  @override
+  Future<void> markNotificationRead(String notificationId) {
+    return Future<void>.error(
+      StateError('No active WeCom activity dataset is available.'),
     );
   }
 }

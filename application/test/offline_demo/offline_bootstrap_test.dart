@@ -17,7 +17,6 @@ void main() {
   late Directory temporaryDirectory;
   late Directory mediaRoot;
   late Directory wecomRoot;
-  late String databasePath;
   late WeComPackageContract contract;
 
   setUpAll(sqfliteFfiInit);
@@ -27,7 +26,6 @@ void main() {
         await Directory.systemTemp.createTemp('tui_offline_bootstrap_');
     mediaRoot = Directory(p.join(temporaryDirectory.path, 'media'));
     wecomRoot = Directory(p.join(temporaryDirectory.path, 'wecom'));
-    databasePath = p.join(temporaryDirectory.path, 'offline.db');
     contract = _contract();
   });
 
@@ -37,11 +35,10 @@ void main() {
     }
   });
 
-  test('does not fall back to schema v2 contacts without an activation',
+  test('does not fall back to schema v2 business data without an activation',
       () async {
     final environment = await OfflineBootstrap.create(
       factory: databaseFactoryFfi,
-      databasePath: databasePath,
       mediaRootDirectory: mediaRoot,
       wecomRootDirectory: wecomRoot,
       wecomContract: contract,
@@ -50,9 +47,13 @@ void main() {
     expect(environment.store.contactsAvailable, isFalse);
     expect(environment.store.conversationsAvailable, isFalse);
     expect(environment.store.identityAvailable, isFalse);
+    expect(environment.store.activityAvailable, isFalse);
     expect(environment.store.profile, isNull);
     expect(environment.store.contacts, isEmpty);
     expect(environment.store.conversations, isEmpty);
+    expect(environment.store.notifications, isEmpty);
+    expect(environment.store.announcements, isEmpty);
+    expect(environment.store.callRecords, isEmpty);
     expect(environment.wecomRuntime, isNull);
 
     await environment.close();
@@ -68,7 +69,6 @@ void main() {
 
     final environment = await OfflineBootstrap.create(
       factory: databaseFactoryFfi,
-      databasePath: databasePath,
       mediaRootDirectory: mediaRoot,
       wecomRootDirectory: wecomRoot,
       wecomContract: contract,
@@ -76,6 +76,7 @@ void main() {
 
     expect(environment.store.contactsAvailable, isTrue);
     expect(environment.store.conversationsAvailable, isTrue);
+    expect(environment.store.activityAvailable, isFalse);
     expect(environment.wecomRuntime?.datasetId, imported.datasetId);
     expect(environment.store.contacts, hasLength(1));
     expect(environment.store.contacts.single.id, '1');
@@ -89,6 +90,9 @@ void main() {
     expect(environment.store.profile?.title, 'Developer');
     expect(environment.store.profile?.account, 'current');
     expect(environment.store.conversations, hasLength(1));
+    expect(environment.store.notifications, isEmpty);
+    expect(environment.store.announcements, isEmpty);
+    expect(environment.store.callRecords, isEmpty);
     expect(environment.store.conversations.single.title, 'Example room');
     expect(environment.store.conversations.single.unreadCount, 2);
     expect(
@@ -115,7 +119,6 @@ void main() {
 
     final reopened = await OfflineBootstrap.create(
       factory: databaseFactoryFfi,
-      databasePath: databasePath,
       mediaRootDirectory: mediaRoot,
       wecomRootDirectory: wecomRoot,
       wecomContract: contract,
@@ -141,7 +144,6 @@ void main() {
     await expectLater(
       OfflineBootstrap.create(
         factory: databaseFactoryFfi,
-        databasePath: databasePath,
         mediaRootDirectory: mediaRoot,
         wecomRootDirectory: wecomRoot,
         wecomContract: contract,
