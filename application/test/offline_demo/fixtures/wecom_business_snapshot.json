@@ -1,0 +1,49 @@
+{
+  "profile": {
+    "displayNamePresent": true,
+    "titlePresent": true,
+    "departmentPresent": true,
+    "accountEmpty": true,
+    "corporationNamePresent": true,
+    "phoneMasked": true,
+    "emailPresent": false,
+    "currentUserInContacts": true
+  },
+  "contacts": {
+    "count": 29,
+    "emptyDisplayNames": 0,
+    "accounts": 0,
+    "organizations": 0,
+    "jobs": 0
+  },
+  "conversations": {
+    "count": 11,
+    "types": {
+      "announce": 1,
+      "file_assist": 1,
+      "group": 5,
+      "single": 2,
+      "system": 1,
+      "wechat_contact": 1
+    },
+    "unreadTotal": 2,
+    "pinned": 0,
+    "muted": 0,
+    "drafts": 0
+  },
+  "messages": {
+    "count": 50,
+    "kinds": {
+      "call": 2,
+      "mixed": 1,
+      "text": 45,
+      "unsupported": 2
+    },
+    "emptySenders": 0
+  },
+  "draft": {
+    "count": 1,
+    "text": "Hello，正确密码是：654321\n[嘿哈][抠鼻][捂脸]\n"
+  },
+  "overlayOperations": 0
+}
