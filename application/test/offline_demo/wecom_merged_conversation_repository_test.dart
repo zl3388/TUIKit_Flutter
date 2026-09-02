@@ -250,6 +250,97 @@ void main() {
     );
   });
 
+  test('applies and reverses an explicit conversation cascade atomically',
+      () async {
+    final deletedRevisionIds = await commands.appendBatch(
+      datasetId: datasetId,
+      mutations: const [
+        WeComOverlayMutation.tombstone(
+          databaseName: 'session.db',
+          tableName: 'conversation_table',
+          rowKey: {'con_numeric_id': 1},
+        ),
+        WeComOverlayMutation.tombstone(
+          databaseName: 'session.db',
+          tableName: 'unread_conversation_table',
+          rowKey: {'conversation_id': 'R:1'},
+        ),
+        WeComOverlayMutation.tombstone(
+          databaseName: 'session.db',
+          tableName: 'conversation_user_table',
+          rowKey: {'conversation_id': 'R:1', 'user_id': 1},
+        ),
+        WeComOverlayMutation.tombstone(
+          databaseName: 'session.db',
+          tableName: 'conversation_user_table',
+          rowKey: {'conversation_id': 'R:1', 'user_id': 2},
+        ),
+      ],
+    );
+
+    expect(
+      (await repository.listConversations())
+          .map((conversation) => conversation.id),
+      ['R:2', 'R:3'],
+    );
+    expect(await repository.listConversationMembers('R:1'), isEmpty);
+    expect(
+      await baseDatabase.query(
+        'conversation_table',
+        where: 'con_numeric_id = ?',
+        whereArgs: [1],
+      ),
+      hasLength(1),
+    );
+
+    await commands.appendBatch(
+      datasetId: datasetId,
+      mutations: [
+        WeComOverlayMutation.upsert(
+          databaseName: 'session.db',
+          tableName: 'conversation_table',
+          rowKey: const {'con_numeric_id': 1},
+          values: const {'name': 'Base one'},
+          revertsRevisionId: deletedRevisionIds[0],
+        ),
+        WeComOverlayMutation.upsert(
+          databaseName: 'session.db',
+          tableName: 'unread_conversation_table',
+          rowKey: const {'conversation_id': 'R:1'},
+          values: const {'unread_count': 0},
+          revertsRevisionId: deletedRevisionIds[1],
+        ),
+        WeComOverlayMutation.upsert(
+          databaseName: 'session.db',
+          tableName: 'conversation_user_table',
+          rowKey: const {'conversation_id': 'R:1', 'user_id': 1},
+          values: const {'nick_name': 'Base member'},
+          revertsRevisionId: deletedRevisionIds[2],
+        ),
+        WeComOverlayMutation.upsert(
+          databaseName: 'session.db',
+          tableName: 'conversation_user_table',
+          rowKey: const {'conversation_id': 'R:1', 'user_id': 2},
+          values: const {'nick_name': 'Deleted member'},
+          revertsRevisionId: deletedRevisionIds[3],
+        ),
+      ],
+    );
+
+    final restored = await repository.listConversations();
+    expect(restored.map((conversation) => conversation.id), [
+      'R:1',
+      'R:2',
+      'R:3',
+    ]);
+    expect(restored.first.unreadState!.unreadCount, 0);
+    expect(
+      (await repository.listConversationMembers('R:1'))
+          .map((member) => member.userId),
+      [1, 2],
+    );
+  });
+
   test('rejects duplicate logical conversation ids after projection', () async {
     await commands.upsert(
       datasetId: datasetId,

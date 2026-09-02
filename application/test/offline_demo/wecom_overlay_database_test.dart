@@ -105,6 +105,12 @@ void main() {
       ],
     );
     expect(await database.connection.getVersion(), WeComOverlaySchema.version);
+    expect(
+      Sqflite.firstIntValue(
+        await database.connection.rawQuery('PRAGMA foreign_keys'),
+      ),
+      1,
+    );
   });
 
   test('operation history is append-only and undo is another revision',
@@ -205,6 +211,62 @@ void main() {
         datasetId: datasetId,
         operation: 'tombstone',
         revertsRevisionId: 99,
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+  });
+
+  test('enforces technical foreign keys and merge identity uniqueness',
+      () async {
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    const newDatasetId =
+        'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+    final createdAt = DateTime.now().toUtc().microsecondsSinceEpoch;
+
+    await database.connection.insert(
+      WeComOverlaySchema.mergeAttemptsTable,
+      {
+        'old_dataset_id': datasetId,
+        'new_dataset_id': newDatasetId,
+        'source_revision_count': 0,
+        'status': 'conflicted',
+        'conflict_count': 1,
+        'created_at_micros': createdAt,
+      },
+    );
+    await expectLater(
+      database.connection.insert(
+        WeComOverlaySchema.mergeAttemptsTable,
+        {
+          'old_dataset_id': datasetId,
+          'new_dataset_id': newDatasetId,
+          'source_revision_count': 0,
+          'status': 'conflicted',
+          'conflict_count': 1,
+          'created_at_micros': createdAt + 1,
+        },
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      database.connection.insert(
+        WeComOverlaySchema.mergeConflictsTable,
+        {
+          'merge_id': 999,
+          'database_name': 'user.db',
+          'table_name': 'user_table',
+          'row_key_json': '{"id":1}',
+          'kind': 'fieldUpdate',
+          'source_revision_ids_json': '[]',
+          'conflicting_columns_json': '["name"]',
+          'old_base_row_sha256': datasetId,
+          'new_base_row_sha256': newDatasetId,
+          'created_at_micros': createdAt + 2,
+        },
       ),
       throwsA(isA<DatabaseException>()),
     );

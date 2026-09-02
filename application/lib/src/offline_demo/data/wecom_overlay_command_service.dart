@@ -7,6 +7,35 @@ import 'wecom_overlay_contract_validator.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
 
+class WeComOverlayMutation {
+  const WeComOverlayMutation.upsert({
+    required this.databaseName,
+    required this.tableName,
+    required this.rowKey,
+    required Map<String, Object?> values,
+    this.baseRowSha256,
+    this.revertsRevisionId,
+  })  : operation = 'upsert',
+        _values = values;
+
+  const WeComOverlayMutation.tombstone({
+    required this.databaseName,
+    required this.tableName,
+    required this.rowKey,
+    this.baseRowSha256,
+    this.revertsRevisionId,
+  })  : operation = 'tombstone',
+        _values = null;
+
+  final String databaseName;
+  final String tableName;
+  final Map<String, Object?> rowKey;
+  final String operation;
+  final Map<String, Object?>? _values;
+  final String? baseRowSha256;
+  final int? revertsRevisionId;
+}
+
 class WeComOverlayCommandService {
   WeComOverlayCommandService({
     required WeComOverlayDatabase overlayDatabase,
@@ -26,17 +55,21 @@ class WeComOverlayCommandService {
     required Map<String, Object?> values,
     String? baseRowSha256,
     int? revertsRevisionId,
-  }) {
-    return _append(
+  }) async {
+    final revisions = await appendBatch(
       datasetId: datasetId,
-      databaseName: databaseName,
-      tableName: tableName,
-      rowKey: rowKey,
-      operation: 'upsert',
-      values: values,
-      baseRowSha256: baseRowSha256,
-      revertsRevisionId: revertsRevisionId,
+      mutations: [
+        WeComOverlayMutation.upsert(
+          databaseName: databaseName,
+          tableName: tableName,
+          rowKey: rowKey,
+          values: values,
+          baseRowSha256: baseRowSha256,
+          revertsRevisionId: revertsRevisionId,
+        ),
+      ],
     );
+    return revisions.single;
   }
 
   Future<int> tombstone({
@@ -46,32 +79,77 @@ class WeComOverlayCommandService {
     required Map<String, Object?> rowKey,
     String? baseRowSha256,
     int? revertsRevisionId,
-  }) {
-    return _append(
+  }) async {
+    final revisions = await appendBatch(
       datasetId: datasetId,
-      databaseName: databaseName,
-      tableName: tableName,
-      rowKey: rowKey,
-      operation: 'tombstone',
-      baseRowSha256: baseRowSha256,
-      revertsRevisionId: revertsRevisionId,
+      mutations: [
+        WeComOverlayMutation.tombstone(
+          databaseName: databaseName,
+          tableName: tableName,
+          rowKey: rowKey,
+          baseRowSha256: baseRowSha256,
+          revertsRevisionId: revertsRevisionId,
+        ),
+      ],
     );
+    return revisions.single;
   }
 
-  Future<int> _append({
+  Future<List<int>> appendBatch({
     required String datasetId,
-    required String databaseName,
-    required String tableName,
-    required Map<String, Object?> rowKey,
-    required String operation,
-    Map<String, Object?>? values,
-    String? baseRowSha256,
-    int? revertsRevisionId,
+    required List<WeComOverlayMutation> mutations,
   }) async {
     _validateSha256(datasetId, 'datasetId');
+    if (mutations.isEmpty) {
+      throw ArgumentError.value(mutations, 'mutations', 'Must not be empty');
+    }
+    final canonicalMutations =
+        mutations.map(_canonicalMutation).toList(growable: false);
+
+    return _overlayDatabase.connection.transaction((transaction) async {
+      final revisionIds = <int>[];
+      for (final mutation in canonicalMutations) {
+        final revertsRevisionId = mutation.revertsRevisionId;
+        if (revertsRevisionId != null) {
+          await _validateRevertTarget(
+            transaction,
+            revisionId: revertsRevisionId,
+            datasetId: datasetId,
+            databaseName: mutation.databaseName,
+            tableName: mutation.tableName,
+            rowKeyJson: mutation.rowKeyJson,
+          );
+        }
+        revisionIds.add(
+          await transaction.insert(
+            WeComOverlaySchema.operationsTable,
+            {
+              'dataset_id': datasetId,
+              'database_name': mutation.databaseName,
+              'table_name': mutation.tableName,
+              'row_key_json': mutation.rowKeyJson,
+              'operation': mutation.operation,
+              'values_json': mutation.valuesJson,
+              'base_row_sha256': mutation.baseRowSha256,
+              'reverts_revision_id': revertsRevisionId,
+              'created_at_micros':
+                  DateTime.now().toUtc().microsecondsSinceEpoch,
+            },
+          ),
+        );
+      }
+      return List<int>.unmodifiable(revisionIds);
+    });
+  }
+
+  _CanonicalWeComOverlayMutation _canonicalMutation(
+    WeComOverlayMutation mutation,
+  ) {
+    final baseRowSha256 = mutation.baseRowSha256;
     if (baseRowSha256 != null) {
       _validateSha256(baseRowSha256, 'baseRowSha256');
     }
+    final revertsRevisionId = mutation.revertsRevisionId;
     if (revertsRevisionId != null && revertsRevisionId < 1) {
       throw ArgumentError.value(
         revertsRevisionId,
@@ -80,38 +158,26 @@ class WeComOverlayCommandService {
       );
     }
 
-    final target = _validator.resolveTarget(databaseName, tableName);
-    final rowKeyJson = jsonEncode(_validator.canonicalRowKey(target, rowKey));
+    final target = _validator.resolveTarget(
+      mutation.databaseName,
+      mutation.tableName,
+    );
+    final rowKeyJson = jsonEncode(
+      _validator.canonicalRowKey(target, mutation.rowKey),
+    );
+    final values = mutation._values;
     final valuesJson = values == null
         ? null
         : jsonEncode(_validator.canonicalValues(target, values));
-
-    return _overlayDatabase.connection.transaction((transaction) async {
-      if (revertsRevisionId != null) {
-        await _validateRevertTarget(
-          transaction,
-          revisionId: revertsRevisionId,
-          datasetId: datasetId,
-          databaseName: databaseName,
-          tableName: tableName,
-          rowKeyJson: rowKeyJson,
-        );
-      }
-      return transaction.insert(
-        WeComOverlaySchema.operationsTable,
-        {
-          'dataset_id': datasetId,
-          'database_name': databaseName,
-          'table_name': tableName,
-          'row_key_json': rowKeyJson,
-          'operation': operation,
-          'values_json': valuesJson,
-          'base_row_sha256': baseRowSha256,
-          'reverts_revision_id': revertsRevisionId,
-          'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
-        },
-      );
-    });
+    return _CanonicalWeComOverlayMutation(
+      databaseName: mutation.databaseName,
+      tableName: mutation.tableName,
+      rowKeyJson: rowKeyJson,
+      operation: mutation.operation,
+      valuesJson: valuesJson,
+      baseRowSha256: baseRowSha256,
+      revertsRevisionId: revertsRevisionId,
+    );
   }
 
   Future<void> _validateRevertTarget(
@@ -153,4 +219,24 @@ class WeComOverlayCommandService {
       throw ArgumentError.value(value, name, 'Must be a lowercase SHA-256');
     }
   }
+}
+
+class _CanonicalWeComOverlayMutation {
+  const _CanonicalWeComOverlayMutation({
+    required this.databaseName,
+    required this.tableName,
+    required this.rowKeyJson,
+    required this.operation,
+    required this.valuesJson,
+    required this.baseRowSha256,
+    required this.revertsRevisionId,
+  });
+
+  final String databaseName;
+  final String tableName;
+  final String rowKeyJson;
+  final String operation;
+  final String? valuesJson;
+  final String? baseRowSha256;
+  final int? revertsRevisionId;
 }

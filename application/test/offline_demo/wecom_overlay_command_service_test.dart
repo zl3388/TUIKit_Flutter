@@ -99,6 +99,83 @@ void main() {
     );
   });
 
+  test('appends ordered mutations atomically', () async {
+    final revisionIds = await service.appendBatch(
+      datasetId: datasetId,
+      mutations: const [
+        WeComOverlayMutation.upsert(
+          databaseName: 'user.db',
+          tableName: 'user_table',
+          rowKey: {'id': 42},
+          values: {'name': 'Updated'},
+        ),
+        WeComOverlayMutation.tombstone(
+          databaseName: 'user.db',
+          tableName: 'user_table',
+          rowKey: {'id': 43},
+        ),
+      ],
+    );
+
+    expect(revisionIds, hasLength(2));
+    expect(revisionIds.last, greaterThan(revisionIds.first));
+    final rows = await overlayDatabase.connection.query(
+      WeComOverlaySchema.operationsTable,
+      columns: ['row_key_json', 'operation', 'values_json'],
+      orderBy: 'revision_id',
+    );
+    expect(rows, [
+      {
+        'row_key_json': '{"id":42}',
+        'operation': 'upsert',
+        'values_json': '{"name":"Updated"}',
+      },
+      {
+        'row_key_json': '{"id":43}',
+        'operation': 'tombstone',
+        'values_json': null,
+      },
+    ]);
+  });
+
+  test('rolls back the batch when a later revert target is invalid', () async {
+    final existingRevision = await service.upsert(
+      datasetId: datasetId,
+      databaseName: 'user.db',
+      tableName: 'user_table',
+      rowKey: const {'id': 42},
+      values: const {'name': 'Existing'},
+    );
+
+    await expectLater(
+      service.appendBatch(
+        datasetId: datasetId,
+        mutations: [
+          const WeComOverlayMutation.upsert(
+            databaseName: 'user.db',
+            tableName: 'user_table',
+            rowKey: {'id': 42},
+            values: {'name': 'Must roll back'},
+          ),
+          WeComOverlayMutation.tombstone(
+            databaseName: 'user.db',
+            tableName: 'user_table',
+            rowKey: const {'id': 43},
+            revertsRevisionId: existingRevision,
+          ),
+        ],
+      ),
+      throwsStateError,
+    );
+
+    final rows = await overlayDatabase.connection.query(
+      WeComOverlaySchema.operationsTable,
+    );
+    expect(rows, hasLength(1));
+    expect(rows.single['revision_id'], existingRevision);
+    expect(rows.single['values_json'], '{"name":"Existing"}');
+  });
+
   test('rejects unknown and non-addressable schema targets', () async {
     await expectLater(
       service.upsert(
@@ -172,6 +249,10 @@ void main() {
     await expectInvalid(values: const {'pb_content': 'opaque'});
     await expectInvalid(dataset: 'invalid');
     await expectInvalid(digest: 'invalid');
+    await expectLater(
+      service.appendBatch(datasetId: datasetId, mutations: const []),
+      throwsArgumentError,
+    );
   });
 }
 
