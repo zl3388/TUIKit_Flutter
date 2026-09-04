@@ -537,6 +537,7 @@ Future<Map<String, Object?>> _businessSnapshot({
 }) async {
   final store = environment.store;
   final profile = store.profile!;
+  final organizationUnits = store.organizationUnits;
   final contacts = store.contacts;
   final conversations = store.conversations;
   final conversationTypes = <String, int>{};
@@ -600,7 +601,13 @@ Future<Map<String, Object?>> _businessSnapshot({
       'accounts': contacts.where((contact) => contact.account != null).length,
       'organizations':
           contacts.where((contact) => contact.organizationName != null).length,
+      'departments':
+          contacts.where((contact) => contact.departmentName != null).length,
       'jobs': contacts.where((contact) => contact.jobTitle != null).length,
+    },
+    'organizationUnits': {
+      'count': organizationUnits.length,
+      'roots': organizationUnits.where((unit) => unit.parentId == null).length,
     },
     'conversations': {
       'count': conversations.length,

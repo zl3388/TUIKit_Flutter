@@ -46,6 +46,7 @@ void main() {
       '',
     ]);
     expect(secondPage.first.account, 'account-fallback');
+    expect(firstPage.first.position, 'Legacy position');
     expect(secondPage.last.account, isNull);
   });
 
@@ -55,7 +56,7 @@ void main() {
     addTearDown(database.close);
     final repository = WeComDirectoryRepository(database);
 
-    final departments = await repository.listDepartments();
+    final departments = await repository.listDepartments(corporationId: 700);
     final memberships = await repository.listDepartmentMemberships();
 
     expect(departments.map((department) => department.id), [10, 20]);
@@ -113,7 +114,8 @@ CREATE TABLE user_table (
   account TEXT DEFAULT '',
   real_name TEXT DEFAULT '',
   external_corp_name TEXT DEFAULT '',
-  external_job TEXT DEFAULT ''
+  external_job TEXT DEFAULT '',
+  position TEXT DEFAULT ''
 )
 ''');
         await database.execute('''
@@ -163,6 +165,7 @@ Future<void> _seedFixture(Database database) async {
     'name': 'Name fallback',
     'account': 'ignored-account',
     'real_name': '',
+    'position': 'Legacy position',
   });
   batch.insert('user_table', {
     'id': 4,
@@ -182,6 +185,13 @@ Future<void> _seedFixture(Database database) async {
     'parent_id': 10,
     'display_order': 900,
     'corpany_id': 700,
+  });
+  batch.insert('department_tableV2', {
+    'id': 30,
+    'name': 'Other corporation',
+    'parent_id': 0,
+    'display_order': 1,
+    'corpany_id': 800,
   });
   batch.insert('department_tableV2', {
     'id': 10,

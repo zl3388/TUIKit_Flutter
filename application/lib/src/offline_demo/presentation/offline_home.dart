@@ -37,8 +37,10 @@ class _OfflineHomeState extends State<OfflineHome> {
           ConversationsPage(store: store),
           ContactsPage(
             contactsAvailable: store.contactsAvailable,
+            organizationUnits: store.organizationUnits,
             contacts: store.contacts,
             onRefresh: store.refreshContacts,
+            loadOrganizationContacts: store.contactsForOrganizationUnit,
           ),
           WorkbenchPage(environment: widget.environment),
           ProfilePage(environment: widget.environment),

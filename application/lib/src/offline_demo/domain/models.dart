@@ -64,6 +64,7 @@ class DirectoryContact {
     required this.displayName,
     this.account,
     this.organizationName,
+    this.departmentName,
     this.jobTitle,
   });
 
@@ -71,6 +72,7 @@ class DirectoryContact {
   final String displayName;
   final String? account;
   final String? organizationName;
+  final String? departmentName;
   final String? jobTitle;
 
   factory DirectoryContact.fromRow(Map<String, Object?> row) =>
@@ -79,6 +81,7 @@ class DirectoryContact {
         displayName: row['display_name']! as String,
         account: row['account'] as String?,
         organizationName: row['organization_name'] as String?,
+        departmentName: row['department_name'] as String?,
         jobTitle: row['job_title'] as String?,
       );
 }

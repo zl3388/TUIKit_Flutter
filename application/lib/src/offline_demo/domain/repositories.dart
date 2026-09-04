@@ -12,7 +12,9 @@ abstract interface class IdentityRepository {
 abstract interface class ContactRepository {
   bool get isAvailable;
 
-  Future<List<DirectoryContact>> listContacts();
+  Future<List<OrgUnit>> listOrganizationUnits();
+
+  Future<List<DirectoryContact>> listContacts({String? organizationUnitId});
 }
 
 enum ConversationFeature {
@@ -152,7 +154,18 @@ class SqliteContactRepository implements ContactRepository {
   bool get isAvailable => true;
 
   @override
-  Future<List<DirectoryContact>> listContacts() async {
+  Future<List<OrgUnit>> listOrganizationUnits() async {
+    final rows = await _db.query(
+      'org_units',
+      orderBy: 'sort_order ASC, id ASC',
+    );
+    return rows.map(OrgUnit.fromRow).toList(growable: false);
+  }
+
+  @override
+  Future<List<DirectoryContact>> listContacts({
+    String? organizationUnitId,
+  }) async {
     final rows = await _db.rawQuery('''
 SELECT
   c.id AS contact_id,
@@ -166,8 +179,9 @@ JOIN org_units ou ON ou.id = c.org_unit_id
 WHERE p.id != (
   SELECT value FROM settings WHERE key = 'current_profile_id' LIMIT 1
 )
+${organizationUnitId == null ? '' : 'AND ou.id = ?'}
 ORDER BY ou.sort_order ASC, p.display_name COLLATE NOCASE ASC
-''');
+''', organizationUnitId == null ? null : [organizationUnitId]);
     return rows.map(DirectoryContact.fromRow).toList(growable: false);
   }
 }
@@ -179,7 +193,13 @@ class UnavailableContactRepository implements ContactRepository {
   bool get isAvailable => false;
 
   @override
-  Future<List<DirectoryContact>> listContacts() async => const [];
+  Future<List<OrgUnit>> listOrganizationUnits() async => const [];
+
+  @override
+  Future<List<DirectoryContact>> listContacts({
+    String? organizationUnitId,
+  }) async =>
+      const [];
 }
 
 class SqliteConversationRepository implements ConversationRepository {

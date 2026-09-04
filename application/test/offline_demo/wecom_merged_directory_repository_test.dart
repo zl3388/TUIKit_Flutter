@@ -158,14 +158,43 @@ void main() {
       ['Base real', 'Restored', 'Overlay only'],
     );
 
-    final viewContacts =
-        await WeComContactRepository(repository).listContacts();
+    final viewContacts = await WeComContactRepository(
+      repository,
+      currentCorporationId: 700,
+    ).listContacts();
     expect(viewContacts.map((contact) => contact.id), ['1', '2', '4']);
     expect(viewContacts[2].organizationName, 'Overlay corp');
     expect(viewContacts[2].account, isNull);
 
     final page = await repository.listInternalContacts(limit: 2, offset: 1);
     expect(page.map((contact) => contact.id), [2, 4]);
+  });
+
+  test('projects the current corporation organization and primary membership',
+      () async {
+    final contacts = WeComContactRepository(
+      repository,
+      currentCorporationId: 700,
+    );
+
+    final units = await contacts.listOrganizationUnits();
+    expect(units.map((unit) => unit.id), ['20', '10']);
+    expect(units.first.parentId, '10');
+    expect(units.last.parentId, isNull);
+
+    final childContacts = await contacts.listContacts(
+      organizationUnitId: '20',
+    );
+    expect(childContacts.map((contact) => contact.id), ['1']);
+    expect(childContacts.single.departmentName, 'Root');
+    expect(childContacts.single.jobTitle, 'Legacy position');
+
+    final rootContacts = await contacts.listContacts(
+      organizationUnitId: '10',
+    );
+    expect(rootContacts.map((contact) => contact.id), ['1', '2']);
+    expect(rootContacts.last.departmentName, 'Root');
+    expect(rootContacts.last.jobTitle, 'Lead');
   });
 
   test('isolates datasets and preserves pagination validation', () async {
@@ -204,7 +233,27 @@ CREATE TABLE user_table (
   account TEXT DEFAULT '',
   real_name TEXT DEFAULT '',
   external_corp_name TEXT DEFAULT '',
-  external_job TEXT DEFAULT ''
+  external_job TEXT DEFAULT '',
+  position TEXT DEFAULT ''
+)
+''');
+        await database.execute('''
+CREATE TABLE department_tableV2 (
+  id INTEGER PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  parent_id INTEGER NOT NULL DEFAULT 0,
+  display_order INTEGER NOT NULL DEFAULT 0,
+  corpany_id INTEGER NOT NULL DEFAULT 0
+)
+''');
+        await database.execute('''
+CREATE TABLE user_dept_tableV2 (
+  department_id INTEGER NOT NULL DEFAULT 0,
+  user_id INTEGER NOT NULL DEFAULT 0,
+  job TEXT NOT NULL DEFAULT '',
+  is_main_job INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (department_id, user_id)
 )
 ''');
         final batch = database.batch();
@@ -215,12 +264,55 @@ CREATE TABLE user_table (
           'real_name': 'Base real',
           'external_corp_name': 'Base corp',
           'external_job': 'Base job',
+          'position': 'Legacy position',
         });
         batch.insert('user_table', {
           'id': 2,
           'name': 'Second',
           'account': 'second-account',
           'real_name': '',
+        });
+        batch.insert('department_tableV2', {
+          'id': 10,
+          'name': 'Root',
+          'parent_id': 0,
+          'display_order': 1000,
+          'corpany_id': 700,
+        });
+        batch.insert('department_tableV2', {
+          'id': 20,
+          'name': 'Child',
+          'parent_id': 10,
+          'display_order': 900,
+          'corpany_id': 700,
+        });
+        batch.insert('department_tableV2', {
+          'id': 30,
+          'name': 'Other corporation',
+          'parent_id': 0,
+          'display_order': 1,
+          'corpany_id': 800,
+        });
+        batch.insert('user_dept_tableV2', {
+          'department_id': 20,
+          'user_id': 1,
+          'job': 'Member job',
+          'is_main_job': 0,
+          'sort': 9,
+        });
+        batch.insert('user_dept_tableV2', {
+          'department_id': 10,
+          'user_id': 1,
+          'job': '',
+          'is_main_job': 1,
+          'sort': 10,
+        });
+        batch.insert('user_dept_tableV2', {
+          'department_id': 10,
+          'user_id': 2,
+          'job': 'Lead',
+          'is_main_job': 1,
+          'sort': 8,
         });
         batch.insert('user_table', {
           'id': 3,

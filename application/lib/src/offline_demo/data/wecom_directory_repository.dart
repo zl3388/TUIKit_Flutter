@@ -33,6 +33,7 @@ SELECT
     ''
   ) AS display_name,
   account,
+  position,
   external_corp_name,
   external_job
 FROM user_table
@@ -44,7 +45,9 @@ LIMIT ? OFFSET ?
     return rows.map(WeComInternalContact.fromRow).toList(growable: false);
   }
 
-  Future<List<WeComDepartment>> listDepartments() async {
+  Future<List<WeComDepartment>> listDepartments({
+    int? corporationId,
+  }) async {
     final rows = await _database.rawQuery('''
 SELECT
   id,
@@ -53,8 +56,9 @@ SELECT
   display_order,
   corpany_id AS corporation_id
 FROM department_tableV2
+${corporationId == null ? '' : 'WHERE corpany_id = ?'}
 ORDER BY id
-''');
+''', corporationId == null ? null : [corporationId]);
     return rows.map(WeComDepartment.fromRow).toList(growable: false);
   }
 

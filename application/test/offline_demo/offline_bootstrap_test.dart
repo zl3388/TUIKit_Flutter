@@ -83,7 +83,11 @@ void main() {
     expect(environment.store.contacts.single.displayName, 'Overlay contact');
     expect(environment.store.contacts.single.account, 'contact.account');
     expect(environment.store.contacts.single.organizationName, 'Example Corp');
-    expect(environment.store.contacts.single.jobTitle, 'Engineer');
+    expect(environment.store.contacts.single.departmentName, 'Engineering');
+    expect(environment.store.contacts.single.jobTitle, 'Developer');
+    expect(environment.store.organizationUnits, hasLength(1));
+    expect(environment.store.organizationUnits.single.name, 'Engineering');
+    expect(environment.store.organizationUnits.single.parentId, isNull);
     expect(environment.store.profile?.displayName, 'Base contact');
     expect(environment.store.profile?.corporationName, 'Example Corporation');
     expect(environment.store.profile?.department, 'Engineering');

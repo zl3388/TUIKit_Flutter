@@ -5,6 +5,7 @@ class WeComInternalContact {
     required this.name,
     this.realName,
     this.account,
+    this.position,
     this.externalCorporationName,
     this.externalJob,
   });
@@ -14,6 +15,7 @@ class WeComInternalContact {
   final String name;
   final String? realName;
   final String? account;
+  final String? position;
   final String? externalCorporationName;
   final String? externalJob;
 
@@ -24,6 +26,7 @@ class WeComInternalContact {
       name: row['name']! as String,
       realName: row['real_name'] as String?,
       account: row['account'] as String?,
+      position: row['position'] as String?,
       externalCorporationName: row['external_corp_name'] as String?,
       externalJob: row['external_job'] as String?,
     );
@@ -34,6 +37,7 @@ class WeComInternalContact {
     required String name,
     String? realName,
     String? account,
+    String? position,
     String? externalCorporationName,
     String? externalJob,
   }) {
@@ -43,6 +47,7 @@ class WeComInternalContact {
       name: name,
       realName: realName,
       account: account,
+      position: position,
       externalCorporationName: externalCorporationName,
       externalJob: externalJob,
     );

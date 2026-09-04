@@ -14,7 +14,12 @@
     "emptyDisplayNames": 0,
     "accounts": 0,
     "organizations": 0,
-    "jobs": 0
+    "departments": 16,
+    "jobs": 15
+  },
+  "organizationUnits": {
+    "count": 62,
+    "roots": 1
   },
   "conversations": {
     "count": 11,

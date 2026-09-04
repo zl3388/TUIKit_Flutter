@@ -93,7 +93,10 @@ abstract final class OfflineBootstrap {
       ConversationRepository conversationRepository;
       try {
         runtime = await resolver.openActive();
-        contactRepository = WeComContactRepository(runtime.directory);
+        contactRepository = WeComContactRepository(
+          runtime.directory,
+          currentCorporationId: runtime.identity.identity.corporationId,
+        );
         identityRepository = runtime.identity;
         conversationRepository = WeComOfflineConversationRepository(
           datasetId: runtime.datasetId,

@@ -275,7 +275,13 @@ class _FixtureContacts implements ContactRepository {
   bool get isAvailable => true;
 
   @override
-  Future<List<DirectoryContact>> listContacts() async => const [
+  Future<List<OrgUnit>> listOrganizationUnits() async => const [];
+
+  @override
+  Future<List<DirectoryContact>> listContacts({
+    String? organizationUnitId,
+  }) async =>
+      const [
         DirectoryContact(
           id: '1',
           displayName: 'Current user',

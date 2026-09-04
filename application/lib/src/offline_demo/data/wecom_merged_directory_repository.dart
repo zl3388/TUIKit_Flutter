@@ -20,6 +20,16 @@ class WeComMergedDirectoryRepository {
   final WeComDirectoryRepository _baseRepository;
   final WeComOverlayDatabase _overlayDatabase;
 
+  Future<List<WeComDepartment>> listDepartments({
+    int? corporationId,
+  }) {
+    return _baseRepository.listDepartments(corporationId: corporationId);
+  }
+
+  Future<List<WeComDepartmentMembership>> listDepartmentMemberships() {
+    return _baseRepository.listDepartmentMemberships();
+  }
+
   Future<List<WeComInternalContact>> listInternalContacts({
     int limit = WeComDirectoryRepository.maxPageSize,
     int offset = 0,
@@ -130,6 +140,7 @@ class _ContactState {
     required this.name,
     this.realName,
     this.account,
+    this.position,
     this.externalCorporationName,
     this.externalJob,
   });
@@ -140,6 +151,7 @@ class _ContactState {
       name: contact.name,
       realName: contact.realName,
       account: contact.account,
+      position: contact.position,
       externalCorporationName: contact.externalCorporationName,
       externalJob: contact.externalJob,
     );
@@ -151,6 +163,7 @@ class _ContactState {
       name: '',
       realName: '',
       account: '',
+      position: '',
       externalCorporationName: '',
       externalJob: '',
     );
@@ -160,6 +173,7 @@ class _ContactState {
   String name;
   String? realName;
   String? account;
+  String? position;
   String? externalCorporationName;
   String? externalJob;
 
@@ -172,6 +186,9 @@ class _ContactState {
     }
     if (values.containsKey('account')) {
       account = _nullableString(values['account'], 'account');
+    }
+    if (values.containsKey('position')) {
+      position = _nullableString(values['position'], 'position');
     }
     if (values.containsKey('external_corp_name')) {
       externalCorporationName = _nullableString(
@@ -190,6 +207,7 @@ class _ContactState {
       name: name,
       realName: realName,
       account: account,
+      position: position,
       externalCorporationName: externalCorporationName,
       externalJob: externalJob,
     );

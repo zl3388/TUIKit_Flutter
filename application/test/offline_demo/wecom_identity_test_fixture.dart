@@ -53,6 +53,9 @@ List<WeComDatabaseContract> identityDatabaseContracts() {
             primaryKeyPosition: 1,
           ),
           testColumn('name', 'TEXT', notNull: true),
+          testColumn('parent_id', 'INTEGER', notNull: true),
+          testColumn('display_order', 'INTEGER', notNull: true),
+          testColumn('corpany_id', 'INTEGER', notNull: true),
         ],
         'user_dept_tableV2': [
           testColumn(
@@ -134,7 +137,10 @@ Future<void> createIdentityDatabases(
   await user.execute(
     'CREATE TABLE department_tableV2 ('
     'id INTEGER PRIMARY KEY NOT NULL, '
-    "name TEXT NOT NULL DEFAULT ''"
+    "name TEXT NOT NULL DEFAULT '', "
+    'parent_id INTEGER NOT NULL DEFAULT 0, '
+    'display_order INTEGER NOT NULL DEFAULT 0, '
+    'corpany_id INTEGER NOT NULL DEFAULT 0'
     ')',
   );
   await user.execute(
@@ -166,7 +172,13 @@ Future<void> createIdentityDatabases(
       ),
     },
   );
-  await user.insert('department_tableV2', {'id': 10, 'name': 'Engineering'});
+  await user.insert('department_tableV2', {
+    'id': 10,
+    'name': 'Engineering',
+    'parent_id': 0,
+    'display_order': 1,
+    'corpany_id': testCorporationId,
+  });
   await user.insert(
     'user_dept_tableV2',
     {

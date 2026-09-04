@@ -9,6 +9,7 @@ class OfflineDemoStore extends ChangeNotifier {
   final OfflineRepositoryBundle repositories;
 
   OfflineProfile? profile;
+  List<OrgUnit> organizationUnits = const [];
   List<DirectoryContact> contacts = const [];
   List<OfflineConversation> conversations = const [];
   List<OfflineNotification> notifications = const [];
@@ -42,6 +43,7 @@ class OfflineDemoStore extends ChangeNotifier {
           : Future<OfflineProfile?>.value();
       final results = await Future.wait<Object?>([
         identity,
+        repositories.contacts.listOrganizationUnits(),
         repositories.contacts.listContacts(),
         repositories.conversations.listConversations(),
         repositories.activity.listNotifications(),
@@ -49,11 +51,12 @@ class OfflineDemoStore extends ChangeNotifier {
         repositories.activity.listCallRecords(),
       ]);
       profile = results[0] as OfflineProfile?;
-      contacts = results[1] as List<DirectoryContact>;
-      conversations = results[2] as List<OfflineConversation>;
-      notifications = results[3] as List<OfflineNotification>;
-      announcements = results[4] as List<OfflineAnnouncement>;
-      callRecords = results[5] as List<OfflineCallRecord>;
+      organizationUnits = results[1] as List<OrgUnit>;
+      contacts = results[2] as List<DirectoryContact>;
+      conversations = results[3] as List<OfflineConversation>;
+      notifications = results[4] as List<OfflineNotification>;
+      announcements = results[5] as List<OfflineAnnouncement>;
+      callRecords = results[6] as List<OfflineCallRecord>;
     } finally {
       isLoading = false;
       notifyListeners();
@@ -61,8 +64,17 @@ class OfflineDemoStore extends ChangeNotifier {
   }
 
   Future<void> refreshContacts() async {
-    contacts = await repositories.contacts.listContacts();
+    final results = await Future.wait<Object>([
+      repositories.contacts.listOrganizationUnits(),
+      repositories.contacts.listContacts(),
+    ]);
+    organizationUnits = results[0] as List<OrgUnit>;
+    contacts = results[1] as List<DirectoryContact>;
     notifyListeners();
+  }
+
+  Future<List<DirectoryContact>> contactsForOrganizationUnit(String id) {
+    return repositories.contacts.listContacts(organizationUnitId: id);
   }
 
   Future<List<OfflineMessage>> messagesFor(String conversationId) {
