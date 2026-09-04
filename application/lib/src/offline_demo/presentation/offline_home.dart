@@ -38,9 +38,13 @@ class _OfflineHomeState extends State<OfflineHome> {
           ContactsPage(
             contactsAvailable: store.contactsAvailable,
             organizationUnits: store.organizationUnits,
+            groups: store.conversations
+                .where((conversation) => conversation.type == 'group')
+                .toList(growable: false),
             contacts: store.contacts,
             onRefresh: store.refreshContacts,
             loadOrganizationContacts: store.contactsForOrganizationUnit,
+            loadGroupMembers: store.membersFor,
           ),
           WorkbenchPage(environment: widget.environment),
           ProfilePage(environment: widget.environment),

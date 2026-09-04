@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../domain/models.dart';
+import 'group_directory_page.dart';
 import 'offline_theme.dart';
 import 'offline_widgets.dart';
 
@@ -8,18 +9,23 @@ class ContactsPage extends StatelessWidget {
   const ContactsPage({
     required this.contactsAvailable,
     required this.organizationUnits,
+    required this.groups,
     required this.contacts,
     required this.onRefresh,
     required this.loadOrganizationContacts,
+    required this.loadGroupMembers,
     super.key,
   });
 
   final bool contactsAvailable;
   final List<OrgUnit> organizationUnits;
+  final List<OfflineConversation> groups;
   final List<DirectoryContact> contacts;
   final Future<void> Function() onRefresh;
   final Future<List<DirectoryContact>> Function(String organizationUnitId)
       loadOrganizationContacts;
+  final Future<List<OfflineConversationMember>> Function(String groupId)
+      loadGroupMembers;
 
   @override
   Widget build(BuildContext context) {
@@ -30,7 +36,7 @@ class ContactsPage extends StatelessWidget {
         label: '未选择联系人数据',
       );
     }
-    if (contacts.isEmpty && organizationUnits.isEmpty) {
+    if (contacts.isEmpty && organizationUnits.isEmpty && groups.isEmpty) {
       return _ContactsState(
         onRefresh: onRefresh,
         icon: Icons.people_outline_rounded,
@@ -42,7 +48,9 @@ class ContactsPage extends StatelessWidget {
       onRefresh: onRefresh,
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: contacts.length + (organizationUnits.isEmpty ? 0 : 1),
+        itemCount: contacts.length +
+            (organizationUnits.isEmpty ? 0 : 1) +
+            (groups.isEmpty ? 0 : 1),
         separatorBuilder: (context, index) => const Divider(indent: 76),
         itemBuilder: (context, index) {
           if (organizationUnits.isNotEmpty && index == 0) {
@@ -74,7 +82,39 @@ class ContactsPage extends StatelessWidget {
               ),
             );
           }
-          final contactIndex = index - (organizationUnits.isEmpty ? 0 : 1);
+          final groupIndex = organizationUnits.isEmpty ? 0 : 1;
+          if (groups.isNotEmpty && index == groupIndex) {
+            return Material(
+              color: Colors.white,
+              child: ListTile(
+                key: const Key('group-directory'),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) => GroupDirectoryPage(
+                      groups: groups,
+                      loadMembers: loadGroupMembers,
+                    ),
+                  ),
+                ),
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFEAF1F8),
+                  child: Icon(
+                    Icons.groups_outlined,
+                    color: Color(0xFF356A98),
+                  ),
+                ),
+                title: const Text(
+                  '群聊',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text('${groups.length} 个群聊'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+              ),
+            );
+          }
+          final contactIndex = index -
+              (organizationUnits.isEmpty ? 0 : 1) -
+              (groups.isEmpty ? 0 : 1);
           return _contactTile(context, contacts[contactIndex]);
         },
       ),

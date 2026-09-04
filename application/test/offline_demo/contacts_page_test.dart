@@ -104,24 +104,84 @@ void main() {
     expect(find.text('职位'), findsOneWidget);
     expect(find.text('Lead'), findsWidgets);
   });
+
+  testWidgets('lists groups and shows only verified member roles',
+      (tester) async {
+    await tester.pumpWidget(
+      _testApp(
+        contacts: const [],
+        groups: const [
+          OfflineConversation(
+            id: 'R:100',
+            type: 'group',
+            title: 'Project group',
+            lastMessagePreview: 'Latest message',
+            lastMessageAt: null,
+            draftText: '',
+            unreadCount: 0,
+            isPinned: false,
+            isMuted: false,
+          ),
+        ],
+        loadGroupMembers: (id) async => const [
+          OfflineConversationMember(
+            conversationId: 'R:100',
+            userId: '1',
+            displayName: 'Group admin',
+            isAdmin: true,
+            gagType: 0,
+          ),
+          OfflineConversationMember(
+            conversationId: 'R:100',
+            userId: '2',
+            displayName: 'Group member',
+            isAdmin: false,
+            gagType: 2,
+          ),
+        ],
+      ),
+    );
+
+    expect(find.text('群聊'), findsOneWidget);
+    expect(find.text('1 个群聊'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('group-directory')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Project group'), findsOneWidget);
+    expect(find.text('Latest message'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('group-R:100')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('成员 · 2'), findsOneWidget);
+    expect(find.text('Group admin'), findsOneWidget);
+    expect(find.text('管理员'), findsOneWidget);
+    expect(find.text('Group member'), findsOneWidget);
+    expect(find.text('禁言'), findsNothing);
+    expect(find.text('群主'), findsNothing);
+  });
 }
 
 Widget _testApp({
   bool contactsAvailable = true,
   List<OrgUnit> organizationUnits = const [],
+  List<OfflineConversation> groups = const [],
   required List<DirectoryContact> contacts,
   Future<List<DirectoryContact>> Function(String organizationUnitId)?
       loadOrganizationContacts,
+  Future<List<OfflineConversationMember>> Function(String groupId)?
+      loadGroupMembers,
 }) {
   return MaterialApp(
     home: Scaffold(
       body: ContactsPage(
         contactsAvailable: contactsAvailable,
         organizationUnits: organizationUnits,
+        groups: groups,
         contacts: contacts,
         onRefresh: _refresh,
         loadOrganizationContacts:
             loadOrganizationContacts ?? _loadNoOrganizationContacts,
+        loadGroupMembers: loadGroupMembers ?? _loadNoGroupMembers,
       ),
     ),
   );
@@ -130,4 +190,7 @@ Widget _testApp({
 Future<void> _refresh() async {}
 
 Future<List<DirectoryContact>> _loadNoOrganizationContacts(String id) async =>
+    const [];
+
+Future<List<OfflineConversationMember>> _loadNoGroupMembers(String id) async =>
     const [];

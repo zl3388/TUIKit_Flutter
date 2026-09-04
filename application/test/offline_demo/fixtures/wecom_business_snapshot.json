@@ -36,6 +36,13 @@
     "muted": 0,
     "drafts": 0
   },
+  "groups": {
+    "count": 5,
+    "members": 39,
+    "admins": 0,
+    "nicknames": 0,
+    "idFallbackNames": 0
+  },
   "messages": {
     "count": 50,
     "kinds": {

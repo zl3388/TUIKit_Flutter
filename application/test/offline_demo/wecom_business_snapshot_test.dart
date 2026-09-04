@@ -544,6 +544,11 @@ Future<Map<String, Object?>> _businessSnapshot({
   final messageKinds = <String, int>{};
   var messageCount = 0;
   var messagesWithEmptySenders = 0;
+  var groupCount = 0;
+  var groupMemberCount = 0;
+  var groupAdminCount = 0;
+  var groupNicknameCount = 0;
+  var groupIdFallbackNameCount = 0;
   for (final conversation in conversations) {
     conversationTypes.update(
       conversation.type,
@@ -563,6 +568,18 @@ Future<Map<String, Object?>> _businessSnapshot({
       if (message.senderName.isEmpty) {
         messagesWithEmptySenders++;
       }
+    }
+    if (conversation.type == 'group') {
+      groupCount++;
+      final members = await environment.repositories.conversations.listMembers(
+        conversation.id,
+      );
+      groupMemberCount += members.length;
+      groupAdminCount += members.where((member) => member.isAdmin).length;
+      groupNicknameCount +=
+          members.where((member) => member.nickname != null).length;
+      groupIdFallbackNameCount +=
+          members.where((member) => member.displayName == member.userId).length;
     }
   }
 
@@ -623,6 +640,13 @@ Future<Map<String, Object?>> _businessSnapshot({
       'drafts': conversations
           .where((conversation) => conversation.draftText.isNotEmpty)
           .length,
+    },
+    'groups': {
+      'count': groupCount,
+      'members': groupMemberCount,
+      'admins': groupAdminCount,
+      'nicknames': groupNicknameCount,
+      'idFallbackNames': groupIdFallbackNameCount,
     },
     'messages': {
       'count': messageCount,
