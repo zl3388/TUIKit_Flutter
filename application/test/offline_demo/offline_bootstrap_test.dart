@@ -128,7 +128,7 @@ void main() {
     await reopened.close();
   });
 
-  test('propagates active package corruption and releases opened resources',
+  test('repairs active package corruption without losing activation or overlay',
       () async {
     final imported = await _importAndActivate(
       temporaryDirectory: temporaryDirectory,
@@ -156,6 +156,31 @@ void main() {
         ),
       ),
     );
+
+    final importer = WeComDatabasePackageImporter(
+      contract: contract,
+      databaseFactory: databaseFactoryFfi,
+    );
+    final repaired = await importer.repairImportedPackage(
+      sourceDirectory: Directory(
+        p.join(temporaryDirectory.path, 'source'),
+      ),
+      destinationRoot: wecomRoot,
+      datasetId: imported.datasetId,
+    );
+    expect(repaired.datasetId, imported.datasetId);
+    expect(repaired.reusedExisting, isFalse);
+
+    final environment = await OfflineBootstrap.create(
+      factory: databaseFactoryFfi,
+      mediaRootDirectory: mediaRoot,
+      wecomRootDirectory: wecomRoot,
+      wecomContract: contract,
+    );
+    expect(environment.wecomRuntime?.datasetId, imported.datasetId);
+    expect(environment.store.contacts.single.displayName, 'Overlay contact');
+    expect(environment.store.conversations.single.title, 'Example room');
+    await environment.close();
   });
 }
 

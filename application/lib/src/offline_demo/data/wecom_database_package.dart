@@ -204,6 +204,7 @@ enum WeComPackageIssueCode {
   existingPackageCorrupt,
   importedPackageMissing,
   invalidDatasetId,
+  repairSourceMismatch,
   importCommitFailed,
 }
 
@@ -356,6 +357,43 @@ class WeComDatabasePackageImporter {
     required Directory destinationRoot,
     Map<String, String> defaultRawKeysBySalt = const {},
     String? temporaryRawKeyHex,
+  }) {
+    return _importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationRoot,
+      defaultRawKeysBySalt: defaultRawKeysBySalt,
+      temporaryRawKeyHex: temporaryRawKeyHex,
+    );
+  }
+
+  Future<WeComImportedPackage> repairImportedPackage({
+    required Directory sourceDirectory,
+    required Directory destinationRoot,
+    required String datasetId,
+    Map<String, String> defaultRawKeysBySalt = const {},
+    String? temporaryRawKeyHex,
+  }) async {
+    if (!_datasetIdPattern.hasMatch(datasetId)) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.invalidDatasetId,
+        'Dataset ID must be 64 lowercase hexadecimal characters',
+      );
+    }
+    return await _importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationRoot,
+      defaultRawKeysBySalt: defaultRawKeysBySalt,
+      temporaryRawKeyHex: temporaryRawKeyHex,
+      repairDatasetId: datasetId,
+    );
+  }
+
+  Future<WeComImportedPackage> _importPackage({
+    required Directory sourceDirectory,
+    required Directory destinationRoot,
+    required Map<String, String> defaultRawKeysBySalt,
+    required String? temporaryRawKeyHex,
+    String? repairDatasetId,
   }) async {
     if (!await sourceDirectory.exists()) {
       throw const WeComPackageException(
@@ -402,6 +440,7 @@ class WeComDatabasePackageImporter {
           destinationRoot: destinationRoot,
           defaultRawKeysBySalt: defaultRawKeysBySalt,
           temporaryRawKeyHex: temporaryRawKeyHex,
+          repairDatasetId: repairDatasetId,
         );
       }
       prepared.add(
@@ -421,16 +460,30 @@ class WeComDatabasePackageImporter {
           destinationRoot: destinationRoot,
           defaultRawKeysBySalt: defaultRawKeysBySalt,
           temporaryRawKeyHex: temporaryRawKeyHex,
+          repairDatasetId: repairDatasetId,
         );
       }
     }
 
     final datasetId = _datasetId(prepared);
+    if (repairDatasetId != null && repairDatasetId != datasetId) {
+      throw const WeComPackageException(
+        WeComPackageIssueCode.repairSourceMismatch,
+        'Repair source does not match the requested dataset',
+      );
+    }
     final datasetsRoot = Directory(p.join(destinationPath, 'datasets'));
     await datasetsRoot.create(recursive: true);
     final finalDirectory = Directory(p.join(datasetsRoot.path, datasetId));
     if (await finalDirectory.exists()) {
-      return _openExisting(finalDirectory, datasetId);
+      if (repairDatasetId == null) {
+        return _openExisting(finalDirectory, datasetId);
+      }
+      try {
+        return await _openExisting(finalDirectory, datasetId);
+      } on WeComPackageException {
+        // Validate the repair source completely before replacing this copy.
+      }
     }
 
     final stagingDirectory = Directory(
@@ -498,6 +551,26 @@ class WeComDatabasePackageImporter {
         manifestFiles.values.toList(growable: false),
       );
 
+      if (repairDatasetId != null && await finalDirectory.exists()) {
+        try {
+          final existing = await _openExisting(finalDirectory, datasetId);
+          await _deleteIfExists(stagingDirectory);
+          return existing;
+        } on WeComPackageException {
+          await _replaceCorruptPackage(
+            finalDirectory: finalDirectory,
+            stagingDirectory: stagingDirectory,
+            datasetId: datasetId,
+          );
+          return WeComImportedPackage._(
+            datasetId: datasetId,
+            directory: finalDirectory,
+            files: Map.unmodifiable(manifestFiles),
+            reusedExisting: false,
+          );
+        }
+      }
+
       try {
         await stagingDirectory.rename(finalDirectory.path);
       } on FileSystemException catch (error) {
@@ -529,6 +602,7 @@ class WeComDatabasePackageImporter {
     required Directory destinationRoot,
     required Map<String, String> defaultRawKeysBySalt,
     required String? temporaryRawKeyHex,
+    required String? repairDatasetId,
   }) async {
     final temporaryDirectory =
         await Directory.systemTemp.createTemp('tui_wecom_preprocess_');
@@ -618,9 +692,12 @@ class WeComDatabasePackageImporter {
       }
 
       await _verifySourceSnapshots(snapshots);
-      return await importPackage(
+      return await _importPackage(
         sourceDirectory: temporaryDirectory,
         destinationRoot: destinationRoot,
+        defaultRawKeysBySalt: const {},
+        temporaryRawKeyHex: null,
+        repairDatasetId: repairDatasetId,
       );
     } finally {
       await _deleteIfExists(temporaryDirectory);
@@ -1363,6 +1440,49 @@ class WeComDatabasePackageImporter {
         ..write('\n');
     }
     return sha256.convert(utf8.encode(material.toString())).toString();
+  }
+
+  Future<void> _replaceCorruptPackage({
+    required Directory finalDirectory,
+    required Directory stagingDirectory,
+    required String datasetId,
+  }) async {
+    final backupDirectory = Directory(
+      p.join(
+        finalDirectory.parent.path,
+        '.repair-$datasetId-'
+        '${DateTime.now().toUtc().microsecondsSinceEpoch}-'
+        '${Random.secure().nextInt(1 << 32)}',
+      ),
+    );
+    try {
+      await finalDirectory.rename(backupDirectory.path);
+      try {
+        await stagingDirectory.rename(finalDirectory.path);
+      } on FileSystemException catch (error) {
+        if (!await finalDirectory.exists() && await backupDirectory.exists()) {
+          await backupDirectory.rename(finalDirectory.path);
+        }
+        throw WeComPackageException(
+          WeComPackageIssueCode.importCommitFailed,
+          'Could not commit the repaired package',
+          cause: error,
+        );
+      }
+    } on WeComPackageException {
+      rethrow;
+    } on FileSystemException catch (error) {
+      throw WeComPackageException(
+        WeComPackageIssueCode.importCommitFailed,
+        'Could not replace the corrupt package',
+        cause: error,
+      );
+    }
+    try {
+      await _deleteIfExists(backupDirectory);
+    } on FileSystemException {
+      // A stale backup is preferable to failing an otherwise valid repair.
+    }
   }
 
   Future<void> _deleteIfExists(Directory directory) async {

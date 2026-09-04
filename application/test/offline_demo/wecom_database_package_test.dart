@@ -522,6 +522,80 @@ void main() {
     expect(await _snapshotSource(sourceDirectory), sourceBefore);
   });
 
+  test('repairs a corrupt imported copy only from the matching source',
+      () async {
+    await _createValidSourcePackage(sourceDirectory);
+    final sourceBefore = await _snapshotSource(sourceDirectory);
+    final importer = _importer(_validContract());
+    final imported = await importer.importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationDirectory,
+    );
+    final importedMain = imported.databaseFile('main.db');
+    await importedMain.writeAsBytes(
+      const [0],
+      mode: FileMode.append,
+      flush: true,
+    );
+    final corruptBytes = await importedMain.readAsBytes();
+
+    final otherSource =
+        await Directory(p.join(temporaryDirectory.path, 'other-source'))
+            .create();
+    await _createValidSourcePackage(otherSource);
+    final otherDatabase = await databaseFactoryFfi.openDatabase(
+      p.join(otherSource.path, 'main.db'),
+      options: OpenDatabaseOptions(singleInstance: false),
+    );
+    await otherDatabase.update('notes', {'body': 'different'});
+    await otherDatabase.close();
+    final otherSourceBefore = await _snapshotSource(otherSource);
+
+    await expectLater(
+      importer.repairImportedPackage(
+        sourceDirectory: otherSource,
+        destinationRoot: destinationDirectory,
+        datasetId: imported.datasetId,
+      ),
+      throwsA(
+        isA<WeComPackageException>().having(
+          (error) => error.code,
+          'code',
+          WeComPackageIssueCode.repairSourceMismatch,
+        ),
+      ),
+    );
+    expect(await importedMain.readAsBytes(), corruptBytes);
+    expect(await _snapshotSource(otherSource), otherSourceBefore);
+
+    final repaired = await importer.repairImportedPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationDirectory,
+      datasetId: imported.datasetId,
+    );
+    expect(repaired.datasetId, imported.datasetId);
+    expect(repaired.reusedExisting, isFalse);
+    expect(await _snapshotSource(sourceDirectory), sourceBefore);
+
+    final database = await repaired.openReadOnly(
+      'main.db',
+      factory: databaseFactoryFfi,
+    );
+    expect(
+      await database.rawQuery('SELECT body FROM notes'),
+      [
+        {'body': 'baseline'}
+      ],
+    );
+    await database.close();
+    final datasetEntries = await Directory(
+      p.join(destinationDirectory.path, 'datasets'),
+    ).list().toList();
+    expect(datasetEntries.map((entry) => p.basename(entry.path)), [
+      imported.datasetId,
+    ]);
+  });
+
   test('encrypted input requests a key without touching the source', () async {
     final main = File(p.join(sourceDirectory.path, 'main.db'));
     await main.writeAsBytes(List<int>.filled(4096, 7), flush: true);
