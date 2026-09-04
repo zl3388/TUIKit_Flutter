@@ -60,6 +60,25 @@ void main() {
     );
   });
 
+  test('rejects package contract versions without an approved baseline', () {
+    for (final formatVersion in [0, 2]) {
+      expect(
+        () => WeComPackageContract(
+          formatVersion: formatVersion,
+          scope: 'unsupported-test-contract',
+          databases: const [],
+        ),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('$formatVersion'),
+          ),
+        ),
+      );
+    }
+  });
+
   test('rejects invalid and missing imported dataset IDs', () async {
     final importer = _importer(_validContract());
     await expectLater(

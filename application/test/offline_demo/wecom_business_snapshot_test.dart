@@ -216,6 +216,182 @@ void main() {
         ? false
         : 'Requires .local/offline-demo/db_spec/samples',
   );
+
+  test(
+    'certifies current empty, boundary, and coexisting-version samples',
+    () async {
+      final contract = WeComPackageContract.fromJsonString(
+        await File(
+          p.join(
+            Directory.current.path,
+            'assets',
+            'offline_demo',
+            'wecom_schema_contract.json',
+          ),
+        ).readAsString(),
+      );
+      final temporaryDirectory = await Directory.systemTemp.createTemp(
+        'tui_wecom_compatibility_boundary_',
+      );
+      addTearDown(() async {
+        if (await temporaryDirectory.exists()) {
+          await temporaryDirectory.delete(recursive: true);
+        }
+      });
+      final source = await _copyPackageSource(
+        samples: samples,
+        destination: Directory(p.join(temporaryDirectory.path, 'source')),
+        contract: contract,
+      );
+
+      expect(
+        contract.databases
+            .where((database) => database.allowEmpty)
+            .map((database) => database.fileName),
+        unorderedEquals(['group_collect.db', 'group_meeting.db']),
+      );
+      for (final database in contract.databases) {
+        final isEmpty =
+            await File(p.join(source.path, database.fileName)).length() == 0;
+        expect(
+          isEmpty,
+          database.allowEmpty,
+          reason: '${database.fileName} empty-file contract differs',
+        );
+      }
+
+      const coexistingVersionTables = {
+        'company.db': [
+          'circle_corp_app_v1',
+          'circle_corp_app_v2',
+          'circle_corp_app_v4',
+          'corp_app_v5',
+          'corp_app_v7',
+        ],
+        'crm.db': [
+          'party_table',
+          'party_table_v2',
+          'party_table_v3',
+          'party_table_v9',
+        ],
+      };
+      for (final entry in coexistingVersionTables.entries) {
+        final actualTables = contract.databases
+            .singleWhere((database) => database.fileName == entry.key)
+            .tables
+            .keys;
+        expect(actualTables, containsAll(entry.value));
+      }
+
+      final imported = await WeComDatabasePackageImporter(
+        contract: contract,
+        databaseFactory: databaseFactoryFfi,
+      ).importPackage(
+        sourceDirectory: source,
+        destinationRoot: Directory(
+          p.join(temporaryDirectory.path, 'destination'),
+        ),
+      );
+      expect(
+        imported.files.values
+            .where((file) => file.isEmptyPlaceholder)
+            .map((file) => file.fileName),
+        unorderedEquals(['group_collect.db', 'group_meeting.db']),
+      );
+
+      for (final databaseContract
+          in contract.databases.where((database) => !database.allowEmpty)) {
+        final database = await imported.openReadOnly(
+          databaseContract.fileName,
+          factory: databaseFactoryFfi,
+        );
+        try {
+          for (final pragma in ['user_version', 'application_id']) {
+            final rows = await database.rawQuery('PRAGMA $pragma');
+            expect(
+              rows.single.values.single,
+              0,
+              reason: '${databaseContract.fileName} PRAGMA $pragma differs',
+            );
+          }
+        } finally {
+          await database.close();
+        }
+      }
+
+      final positiveBoundaryQueries = {
+        'user.db': 'SELECT '
+            '(SELECT COUNT(*) FROM user_table '
+            "WHERE real_name = '' AND name <> '' "
+            'AND COALESCE('
+            "NULLIF(real_name, ''), NULLIF(name, ''), NULLIF(account, ''), ''"
+            ') = name) AS fallback_names, '
+            '(SELECT COUNT(*) FROM user_table WHERE id > 2147483647) '
+            'AS wide_ids, '
+            '(SELECT COUNT(*) FROM user_table AS users '
+            'WHERE NOT EXISTS (SELECT 1 FROM user_dept_tableV2 AS memberships '
+            'WHERE memberships.user_id = users.id)) AS no_department, '
+            '(SELECT COUNT(*) FROM dept_tree_table '
+            'WHERE first_child_id = 4294967295 '
+            'OR next_sibling_id = 4294967295) AS sentinel_links',
+        'session.db': 'SELECT '
+            '(SELECT COUNT(*) FROM conversation_table '
+            "WHERE id IN ('FILEASSIST', 'ANNOUNCE', 'MAIL', 'APPROVAL')) "
+            'AS system_conversations, '
+            '(SELECT COUNT(*) FROM conversation_table WHERE id LIKE '
+            "'S:%') AS single_conversations, "
+            '(SELECT COUNT(*) FROM unread_conversation_table '
+            'WHERE unread_count = 0) AS read_rows, '
+            '(SELECT COUNT(*) FROM unread_conversation_table '
+            'WHERE unread_count > 1) AS multiple_unread_rows',
+        'message.db': 'SELECT '
+            '(SELECT COUNT(*) FROM message_table WHERE content IS NULL) '
+            'AS null_content, '
+            '(SELECT COUNT(*) FROM message_table '
+            "WHERE typeof(content) IN ('text', 'blob') AND length(content) = 0) "
+            'AS empty_content, '
+            '(SELECT COUNT(*) FROM message_table WHERE typeof(content) = '
+            "'blob') AS blob_content, "
+            '(SELECT COUNT(*) FROM message_table WHERE content_type = 0) '
+            'AS unsupported_content',
+      };
+      for (final entry in positiveBoundaryQueries.entries) {
+        final database = await imported.openReadOnly(
+          entry.key,
+          factory: databaseFactoryFfi,
+        );
+        try {
+          final counts = (await database.rawQuery(entry.value)).single;
+          for (final count in counts.entries) {
+            expect(
+              count.value,
+              greaterThan(0),
+              reason: '${entry.key} boundary ${count.key} is missing',
+            );
+          }
+        } finally {
+          await database.close();
+        }
+      }
+
+      final oneUnreadDatabase = await databaseFactoryFfi.openDatabase(
+        p.join(samples.path, 'Data-Sample3', 'session.db'),
+        options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+      );
+      try {
+        final rows = await oneUnreadDatabase.rawQuery(
+          'SELECT COUNT(*) AS count FROM unread_conversation_table '
+          'WHERE unread_count = 1',
+        );
+        expect(rows.single['count'], greaterThan(0));
+      } finally {
+        await oneUnreadDatabase.close();
+      }
+    },
+    skip: samples.existsSync()
+        ? false
+        : 'Requires .local/offline-demo/db_spec/samples',
+  );
 }
 
 Future<
