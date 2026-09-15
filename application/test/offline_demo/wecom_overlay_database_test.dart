@@ -57,6 +57,8 @@ void main() {
         'base_row_sha256',
         'reverts_revision_id',
         'created_at_micros',
+        'identity_corp_id',
+        'identity_user_id',
       ],
     );
     expect(
@@ -71,6 +73,8 @@ void main() {
         'last_applied_revision_id',
         'conflict_count',
         'created_at_micros',
+        'identity_corp_id',
+        'identity_user_id',
       ],
     );
     expect(
@@ -232,6 +236,8 @@ void main() {
       {
         'old_dataset_id': datasetId,
         'new_dataset_id': newDatasetId,
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
         'source_revision_count': 0,
         'status': 'conflicted',
         'conflict_count': 1,
@@ -244,6 +250,8 @@ void main() {
         {
           'old_dataset_id': datasetId,
           'new_dataset_id': newDatasetId,
+          'identity_corp_id': 100,
+          'identity_user_id': 1,
           'source_revision_count': 0,
           'status': 'conflicted',
           'conflict_count': 1,
@@ -251,6 +259,19 @@ void main() {
         },
       ),
       throwsA(isA<DatabaseException>()),
+    );
+    await database.connection.insert(
+      WeComOverlaySchema.mergeAttemptsTable,
+      {
+        'old_dataset_id': datasetId,
+        'new_dataset_id': newDatasetId,
+        'identity_corp_id': 200,
+        'identity_user_id': 2,
+        'source_revision_count': 0,
+        'status': 'conflicted',
+        'conflict_count': 1,
+        'created_at_micros': createdAt + 2,
+      },
     );
     await expectLater(
       database.connection.insert(
@@ -266,6 +287,45 @@ void main() {
           'old_base_row_sha256': datasetId,
           'new_base_row_sha256': newDatasetId,
           'created_at_micros': createdAt + 2,
+        },
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+  });
+
+  test('requires identity metadata for new operations and merge attempts',
+      () async {
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final createdAt = DateTime.now().toUtc().microsecondsSinceEpoch;
+
+    await expectLater(
+      database.connection.insert(
+        WeComOverlaySchema.operationsTable,
+        {
+          'dataset_id': datasetId,
+          'database_name': 'user.db',
+          'table_name': 'user_table',
+          'row_key_json': '{"id":1}',
+          'operation': 'tombstone',
+          'created_at_micros': createdAt,
+        },
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      database.connection.insert(
+        WeComOverlaySchema.mergeAttemptsTable,
+        {
+          'old_dataset_id': datasetId,
+          'new_dataset_id': datasetId,
+          'source_revision_count': 0,
+          'status': 'applied',
+          'conflict_count': 0,
+          'created_at_micros': createdAt,
         },
       ),
       throwsA(isA<DatabaseException>()),
@@ -357,6 +417,92 @@ void main() {
     expect(activation['current_user_id'], isNull);
   });
 
+  test('upgrades version 3 operations for one unambiguous identity', () async {
+    final rawDatabase = await _openVersion3Database(databasePath);
+    await rawDatabase.insert(
+      WeComOverlaySchema.datasetActivationsTable,
+      {
+        'previous_dataset_id': null,
+        'dataset_id': datasetId,
+        'merge_id': null,
+        'current_corp_id': 100,
+        'current_user_id': 1,
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+    await rawDatabase.insert(
+      WeComOverlaySchema.operationsTable,
+      {
+        'dataset_id': datasetId,
+        'database_name': 'user.db',
+        'table_name': 'user_table',
+        'row_key_json': '{"id":1}',
+        'operation': 'upsert',
+        'values_json': '{"name":"legacy"}',
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+    await rawDatabase.close();
+
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final operation = (await database.connection.query(
+      WeComOverlaySchema.operationsTable,
+    ))
+        .single;
+
+    expect(operation['identity_corp_id'], 100);
+    expect(operation['identity_user_id'], 1);
+  });
+
+  test('does not assign ambiguous version 3 operations to an identity',
+      () async {
+    final rawDatabase = await _openVersion3Database(databasePath);
+    for (final identity in const [(100, 1), (200, 2)]) {
+      await rawDatabase.insert(
+        WeComOverlaySchema.datasetActivationsTable,
+        {
+          'previous_dataset_id': identity.$1 == 100 ? null : datasetId,
+          'dataset_id': datasetId,
+          'merge_id': null,
+          'current_corp_id': identity.$1,
+          'current_user_id': identity.$2,
+          'created_at_micros':
+              DateTime.now().toUtc().microsecondsSinceEpoch + identity.$1,
+        },
+      );
+    }
+    await rawDatabase.insert(
+      WeComOverlaySchema.operationsTable,
+      {
+        'dataset_id': datasetId,
+        'database_name': 'user.db',
+        'table_name': 'user_table',
+        'row_key_json': '{"id":1}',
+        'operation': 'upsert',
+        'values_json': '{"name":"ambiguous"}',
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+    await rawDatabase.close();
+
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final operation = (await database.connection.query(
+      WeComOverlaySchema.operationsTable,
+    ))
+        .single;
+
+    expect(operation['identity_corp_id'], isNull);
+    expect(operation['identity_user_id'], isNull);
+  });
+
   test('reopening preserves the append-only revision history', () async {
     var database = await WeComOverlayDatabase.open(
       factory: databaseFactoryFfi,
@@ -417,6 +563,8 @@ Future<int> _insertOperation(
     WeComOverlaySchema.operationsTable,
     {
       'dataset_id': datasetId,
+      'identity_corp_id': 100,
+      'identity_user_id': 1,
       'database_name': 'message.db',
       'table_name': 'message_table',
       'row_key_json': '{"id":1}',
@@ -426,5 +574,24 @@ Future<int> _insertOperation(
       'reverts_revision_id': revertsRevisionId,
       'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
     },
+  );
+}
+
+Future<Database> _openVersion3Database(String databasePath) {
+  return databaseFactoryFfi.openDatabase(
+    databasePath,
+    options: OpenDatabaseOptions(
+      version: 3,
+      singleInstance: false,
+      onCreate: (database, version) async {
+        await WeComOverlaySchema.createVersion1(database);
+        for (final statement in WeComOverlaySchema.version2CreateStatements) {
+          await database.execute(statement);
+        }
+        for (final statement in WeComOverlaySchema.version3UpgradeStatements) {
+          await database.execute(statement);
+        }
+      },
+    ),
   );
 }

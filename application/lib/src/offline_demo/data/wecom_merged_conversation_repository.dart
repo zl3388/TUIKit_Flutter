@@ -2,12 +2,14 @@ import 'dart:convert';
 
 import '../domain/wecom_conversation_models.dart';
 import 'wecom_conversation_repository.dart';
+import 'wecom_identity_repository.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
 
 class WeComMergedConversationRepository {
   const WeComMergedConversationRepository({
     required this.datasetId,
+    required this.identityScope,
     required WeComConversationRepository baseRepository,
     required WeComOverlayDatabase overlayDatabase,
   })  : _baseRepository = baseRepository,
@@ -19,6 +21,7 @@ class WeComMergedConversationRepository {
   static const _memberTable = 'conversation_user_table';
 
   final String datasetId;
+  final WeComIdentityScope identityScope;
   final WeComConversationRepository _baseRepository;
   final WeComOverlayDatabase _overlayDatabase;
 
@@ -204,8 +207,15 @@ class WeComMergedConversationRepository {
     return _overlayDatabase.connection.query(
       WeComOverlaySchema.operationsTable,
       columns: ['row_key_json', 'operation', 'values_json'],
-      where: 'dataset_id = ? AND database_name = ? AND table_name = ?',
-      whereArgs: [datasetId, _databaseName, tableName],
+      where: 'dataset_id = ? AND identity_corp_id = ? '
+          'AND identity_user_id = ? AND database_name = ? AND table_name = ?',
+      whereArgs: [
+        datasetId,
+        identityScope.corporationId,
+        identityScope.userId,
+        _databaseName,
+        tableName,
+      ],
       orderBy: 'revision_id',
     );
   }

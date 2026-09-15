@@ -316,6 +316,21 @@ void main() {
     expect(await destinationDirectory.exists(), isFalse);
   });
 
+  test('decrypts an encrypted database with a zero-byte WAL', () async {
+    await _createEncryptedSourcePackage(sourceDirectory);
+    await File(p.join(sourceDirectory.path, 'main.db-wal')).create();
+    final sourceBefore = await _snapshotSource(sourceDirectory);
+
+    final imported = await _importer(_encryptedContract()).importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationDirectory,
+      temporaryRawKeyHex: _publicTestKey,
+    );
+
+    expect(imported.files['main.db']!.sha256, _decryptedJournalSha256);
+    expect(await _snapshotSource(sourceDirectory), sourceBefore);
+  });
+
   test('normalizes an empty private FTS table in the imported copy', () async {
     await _createPrivateFtsSourcePackage(sourceDirectory, withContent: false);
     final sourceBefore = await _snapshotSource(sourceDirectory);

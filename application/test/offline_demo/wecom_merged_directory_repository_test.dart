@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:application/src/offline_demo/data/wecom_contact_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_directory_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_directory_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
@@ -52,9 +53,17 @@ void main() {
     commands = WeComOverlayCommandService(
       overlayDatabase: overlayDatabase,
       contract: contract,
+      identityScope: const WeComIdentityScope(
+        corporationId: 700,
+        userId: 1,
+      ),
     );
     repository = WeComMergedDirectoryRepository(
       datasetId: datasetId,
+      identityScope: const WeComIdentityScope(
+        corporationId: 700,
+        userId: 1,
+      ),
       baseRepository: WeComDirectoryRepository(baseDatabase),
       overlayDatabase: overlayDatabase,
     );
@@ -204,6 +213,21 @@ void main() {
       tableName: 'user_table',
       rowKey: const {'id': 1},
       values: const {'real_name': 'Other dataset'},
+    );
+    final otherIdentity = WeComOverlayCommandService(
+      overlayDatabase: overlayDatabase,
+      contract: contract,
+      identityScope: const WeComIdentityScope(
+        corporationId: 701,
+        userId: 2,
+      ),
+    );
+    await otherIdentity.upsert(
+      datasetId: datasetId,
+      databaseName: 'user.db',
+      tableName: 'user_table',
+      rowKey: const {'id': 1},
+      values: const {'real_name': 'Other identity'},
     );
 
     final contacts = await repository.listInternalContacts();

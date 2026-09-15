@@ -1,7 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 abstract final class WeComOverlaySchema {
-  static const version = 3;
+  static const version = 4;
 
   static const operationsTable = 'overlay_operations';
   static const mergeAttemptsTable = 'overlay_merge_attempts';
@@ -14,10 +14,14 @@ abstract final class WeComOverlaySchema {
 
   static const noUpdateTrigger = 'trg_overlay_operations_no_update';
   static const noDeleteTrigger = 'trg_overlay_operations_no_delete';
+  static const identityRequiredTrigger =
+      'trg_overlay_operations_identity_required';
   static const mergeAttemptNoUpdateTrigger =
       'trg_overlay_merge_attempts_no_update';
   static const mergeAttemptNoDeleteTrigger =
       'trg_overlay_merge_attempts_no_delete';
+  static const mergeAttemptIdentityRequiredTrigger =
+      'trg_overlay_merge_attempts_identity_required';
   static const mergeConflictNoUpdateTrigger =
       'trg_overlay_merge_conflicts_no_update';
   static const mergeConflictNoDeleteTrigger =
@@ -41,10 +45,12 @@ abstract final class WeComOverlaySchema {
   static const expectedTriggers = <String>[
     activationNoDeleteTrigger,
     activationNoUpdateTrigger,
+    mergeAttemptIdentityRequiredTrigger,
     mergeAttemptNoDeleteTrigger,
     mergeAttemptNoUpdateTrigger,
     mergeConflictNoDeleteTrigger,
     mergeConflictNoUpdateTrigger,
+    identityRequiredTrigger,
     noDeleteTrigger,
     noUpdateTrigger,
   ];
@@ -353,10 +359,160 @@ END
 ''',
   ];
 
+  static const version4UpgradeStatements = <String>[
+    'DROP TRIGGER IF EXISTS trg_overlay_operations_no_update',
+    'DROP TRIGGER IF EXISTS trg_overlay_merge_attempts_no_update',
+    '''
+ALTER TABLE overlay_operations
+ADD COLUMN identity_corp_id INTEGER CHECK (identity_corp_id > 0)
+''',
+    '''
+ALTER TABLE overlay_operations
+ADD COLUMN identity_user_id INTEGER CHECK (identity_user_id > 0)
+''',
+    '''
+UPDATE overlay_operations
+SET
+  identity_corp_id = (
+    SELECT MIN(current_corp_id)
+    FROM overlay_dataset_activations
+    WHERE dataset_id = overlay_operations.dataset_id
+      AND current_corp_id IS NOT NULL
+      AND current_user_id IS NOT NULL
+  ),
+  identity_user_id = (
+    SELECT MIN(current_user_id)
+    FROM overlay_dataset_activations
+    WHERE dataset_id = overlay_operations.dataset_id
+      AND current_corp_id IS NOT NULL
+      AND current_user_id IS NOT NULL
+  )
+WHERE 1 = (
+  SELECT COUNT(DISTINCT current_corp_id || ':' || current_user_id)
+  FROM overlay_dataset_activations
+  WHERE dataset_id = overlay_operations.dataset_id
+    AND current_corp_id IS NOT NULL
+    AND current_user_id IS NOT NULL
+)
+''',
+    'DROP INDEX idx_overlay_operations_target',
+    '''
+CREATE INDEX idx_overlay_operations_target
+ON overlay_operations (
+  dataset_id,
+  identity_corp_id,
+  identity_user_id,
+  database_name,
+  table_name,
+  row_key_json,
+  revision_id
+)
+''',
+    '''
+ALTER TABLE overlay_merge_attempts
+ADD COLUMN identity_corp_id INTEGER CHECK (identity_corp_id > 0)
+''',
+    '''
+ALTER TABLE overlay_merge_attempts
+ADD COLUMN identity_user_id INTEGER CHECK (identity_user_id > 0)
+''',
+    '''
+UPDATE overlay_merge_attempts
+SET
+  identity_corp_id = (
+    SELECT current_corp_id
+    FROM overlay_dataset_activations
+    WHERE merge_id = overlay_merge_attempts.merge_id
+    LIMIT 1
+  ),
+  identity_user_id = (
+    SELECT current_user_id
+    FROM overlay_dataset_activations
+    WHERE merge_id = overlay_merge_attempts.merge_id
+    LIMIT 1
+  )
+WHERE EXISTS (
+  SELECT 1
+  FROM overlay_dataset_activations
+  WHERE merge_id = overlay_merge_attempts.merge_id
+    AND current_corp_id IS NOT NULL
+    AND current_user_id IS NOT NULL
+)
+''',
+    '''
+UPDATE overlay_merge_attempts
+SET
+  identity_corp_id = (
+    SELECT MIN(current_corp_id)
+    FROM overlay_dataset_activations
+    WHERE dataset_id = overlay_merge_attempts.old_dataset_id
+      AND current_corp_id IS NOT NULL
+      AND current_user_id IS NOT NULL
+  ),
+  identity_user_id = (
+    SELECT MIN(current_user_id)
+    FROM overlay_dataset_activations
+    WHERE dataset_id = overlay_merge_attempts.old_dataset_id
+      AND current_corp_id IS NOT NULL
+      AND current_user_id IS NOT NULL
+  )
+WHERE identity_corp_id IS NULL
+  AND 1 = (
+    SELECT COUNT(DISTINCT current_corp_id || ':' || current_user_id)
+    FROM overlay_dataset_activations
+    WHERE dataset_id = overlay_merge_attempts.old_dataset_id
+      AND current_corp_id IS NOT NULL
+      AND current_user_id IS NOT NULL
+  )
+''',
+    'DROP INDEX idx_overlay_merge_attempts_identity',
+    '''
+CREATE UNIQUE INDEX idx_overlay_merge_attempts_identity
+ON overlay_merge_attempts (
+  identity_corp_id,
+  identity_user_id,
+  old_dataset_id,
+  new_dataset_id,
+  source_revision_count
+)
+''',
+    '''
+CREATE TRIGGER trg_overlay_operations_identity_required
+BEFORE INSERT ON overlay_operations
+WHEN NEW.identity_corp_id IS NULL OR NEW.identity_user_id IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'overlay operations require an identity');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_merge_attempts_identity_required
+BEFORE INSERT ON overlay_merge_attempts
+WHEN NEW.identity_corp_id IS NULL OR NEW.identity_user_id IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'overlay merge attempts require an identity');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_operations_no_update
+BEFORE UPDATE ON overlay_operations
+BEGIN
+  SELECT RAISE(ABORT, 'overlay operations are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_merge_attempts_no_update
+BEFORE UPDATE ON overlay_merge_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'overlay merge attempts are append-only');
+END
+''',
+  ];
+
   static const createStatements = <String>[
     ...version1CreateStatements,
     ...version2CreateStatements,
     ...version3UpgradeStatements,
+    ...version4UpgradeStatements,
   ];
 
   static Future<void> createCurrent(Database db) {
@@ -376,10 +532,17 @@ END
       return _execute(db, [
         ...version2CreateStatements,
         ...version3UpgradeStatements,
+        ...version4UpgradeStatements,
       ]);
     }
     if (newVersion == version && oldVersion == 2) {
-      return _execute(db, version3UpgradeStatements);
+      return _execute(db, [
+        ...version3UpgradeStatements,
+        ...version4UpgradeStatements,
+      ]);
+    }
+    if (newVersion == version && oldVersion == 3) {
+      return _execute(db, version4UpgradeStatements);
     }
     throw StateError(
       'Unsupported overlay schema upgrade: $oldVersion -> $newVersion',

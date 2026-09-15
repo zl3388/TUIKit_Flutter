@@ -121,6 +121,7 @@ void main() {
       final commands = WeComOverlayCommandService(
         overlayDatabase: environment.wecomOverlayDatabase,
         contract: contract,
+        identityScope: environment.wecomRuntime!.identity.identity.scope,
       );
 
       await commands.upsert(
@@ -153,6 +154,7 @@ void main() {
       ).export(
         basePackage: setup.imported,
         overlayDatabase: environment.wecomOverlayDatabase,
+        identityScope: environment.wecomRuntime!.identity.identity.scope,
         destinationDirectory: Directory(
           p.join(temporaryDirectory.path, 'compatible-copy'),
         ),

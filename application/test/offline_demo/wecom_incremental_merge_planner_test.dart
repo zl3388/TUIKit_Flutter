@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_incremental_merge_planner.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
@@ -114,6 +115,10 @@ void main() {
       oldBasePackage: packages.oldPackage,
       newBasePackage: packages.newPackage,
       overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
 
     expect(plan.canApply, isTrue);
@@ -149,6 +154,10 @@ void main() {
       oldBasePackage: packages.oldPackage,
       newBasePackage: packages.newPackage,
       overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
 
     expect(plan.canApply, isFalse);
@@ -192,6 +201,10 @@ void main() {
       oldBasePackage: packages.oldPackage,
       newBasePackage: packages.newPackage,
       overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
 
     expect(plan.operations, isEmpty);
@@ -240,6 +253,10 @@ void main() {
       oldBasePackage: packages.oldPackage,
       newBasePackage: packages.newPackage,
       overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
 
     expect(plan.operations, isEmpty);
@@ -290,6 +307,10 @@ void main() {
       oldBasePackage: packages.oldPackage,
       newBasePackage: packages.newPackage,
       overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
 
     expect(plan.canApply, isTrue);
@@ -338,6 +359,10 @@ void main() {
       oldBasePackage: packages.oldPackage,
       newBasePackage: packages.newPackage,
       overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
 
     expect(plan.operations, isEmpty);
@@ -370,6 +395,8 @@ void main() {
       WeComOverlaySchema.operationsTable,
       {
         'dataset_id': packages.oldPackage.datasetId,
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
         'database_name': 'user.db',
         'table_name': 'user_dept_tableV2',
         'row_key_json': '{"user_id":1,"department_id":10}',
@@ -384,6 +411,10 @@ void main() {
         oldBasePackage: packages.oldPackage,
         newBasePackage: packages.newPackage,
         overlayDatabase: overlayDatabase,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
       ),
       throwsA(
         isA<WeComIncrementalMergeException>().having(
@@ -394,6 +425,43 @@ void main() {
       ),
     );
   });
+
+  test('ignores revisions owned by another identity', () async {
+    final packages = await _importPair(
+      temporaryDirectory,
+      importer,
+      oldRows: [_user(1, name: 'Alice')],
+      newRows: [_user(1, name: 'Alice', account: 'remote')],
+    );
+    await overlayDatabase.connection.insert(
+      WeComOverlaySchema.operationsTable,
+      {
+        'dataset_id': packages.oldPackage.datasetId,
+        'identity_corp_id': 200,
+        'identity_user_id': 2,
+        'database_name': 'user.db',
+        'table_name': 'user_dept_tableV2',
+        'row_key_json': '{"user_id":1,"department_id":10}',
+        'operation': 'upsert',
+        'values_json': '{"status":1}',
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+
+    final plan = await planner.plan(
+      oldBasePackage: packages.oldPackage,
+      newBasePackage: packages.newPackage,
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
+    );
+
+    expect(plan.sourceRevisionCount, 0);
+    expect(plan.operations, isEmpty);
+    expect(plan.conflicts, isEmpty);
+  });
 }
 
 WeComOverlayCommandService _commands(
@@ -403,6 +471,10 @@ WeComOverlayCommandService _commands(
   return WeComOverlayCommandService(
     overlayDatabase: database,
     contract: contract,
+    identityScope: const WeComIdentityScope(
+      corporationId: 100,
+      userId: 1,
+    ),
   );
 }
 

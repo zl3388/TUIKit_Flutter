@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
@@ -29,6 +30,10 @@ void main() {
     service = WeComOverlayCommandService(
       overlayDatabase: overlayDatabase,
       contract: _contract(),
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
   });
 
@@ -56,6 +61,8 @@ void main() {
     ))
         .single;
     expect(row['database_name'], 'user.db');
+    expect(row['identity_corp_id'], 100);
+    expect(row['identity_user_id'], 1);
     expect(row['table_name'], 'user_table');
     expect(row['row_key_json'], '{"id":42}');
     expect(row['operation'], 'upsert');
@@ -96,6 +103,35 @@ void main() {
         WeComOverlaySchema.operationsTable,
       ),
       hasLength(2),
+    );
+  });
+
+  test('rejects a revert owned by another identity', () async {
+    final firstRevision = await service.upsert(
+      datasetId: datasetId,
+      databaseName: 'user.db',
+      tableName: 'user_table',
+      rowKey: const {'id': 42},
+      values: const {'name': 'First identity'},
+    );
+    final otherIdentity = WeComOverlayCommandService(
+      overlayDatabase: overlayDatabase,
+      contract: _contract(),
+      identityScope: const WeComIdentityScope(
+        corporationId: 200,
+        userId: 2,
+      ),
+    );
+
+    await expectLater(
+      otherIdentity.tombstone(
+        datasetId: datasetId,
+        databaseName: 'user.db',
+        tableName: 'user_table',
+        rowKey: const {'id': 42},
+        revertsRevisionId: firstRevision,
+      ),
+      throwsStateError,
     );
   });
 

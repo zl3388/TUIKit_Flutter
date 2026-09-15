@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 
 import 'wecom_database_package.dart';
+import 'wecom_identity_repository.dart';
 import 'wecom_overlay_contract_validator.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
@@ -40,12 +41,17 @@ class WeComOverlayCommandService {
   WeComOverlayCommandService({
     required WeComOverlayDatabase overlayDatabase,
     required WeComPackageContract contract,
+    required WeComIdentityScope identityScope,
   })  : _overlayDatabase = overlayDatabase,
-        _validator = WeComOverlayContractValidator(contract);
+        _validator = WeComOverlayContractValidator(contract),
+        _identityScope = identityScope {
+    identityScope.validate();
+  }
 
   static final RegExp _sha256Pattern = RegExp(r'^[0-9a-f]{64}$');
   final WeComOverlayDatabase _overlayDatabase;
   final WeComOverlayContractValidator _validator;
+  final WeComIdentityScope _identityScope;
 
   Future<int> upsert({
     required String datasetId,
@@ -125,6 +131,8 @@ class WeComOverlayCommandService {
             WeComOverlaySchema.operationsTable,
             {
               'dataset_id': datasetId,
+              'identity_corp_id': _identityScope.corporationId,
+              'identity_user_id': _identityScope.userId,
               'database_name': mutation.databaseName,
               'table_name': mutation.tableName,
               'row_key_json': mutation.rowKeyJson,
@@ -192,6 +200,8 @@ class WeComOverlayCommandService {
       WeComOverlaySchema.operationsTable,
       columns: [
         'dataset_id',
+        'identity_corp_id',
+        'identity_user_id',
         'database_name',
         'table_name',
         'row_key_json',
@@ -205,11 +215,13 @@ class WeComOverlayCommandService {
     }
     final row = rows.single;
     if (row['dataset_id'] != datasetId ||
+        row['identity_corp_id'] != _identityScope.corporationId ||
+        row['identity_user_id'] != _identityScope.userId ||
         row['database_name'] != databaseName ||
         row['table_name'] != tableName ||
         row['row_key_json'] != rowKeyJson) {
       throw StateError(
-        'A revert must target the same dataset, table, and row key',
+        'A revert must target the same identity, dataset, table, and row key',
       );
     }
   }

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package_exporter.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
@@ -47,6 +48,10 @@ void main() {
     commands = WeComOverlayCommandService(
       overlayDatabase: overlayDatabase,
       contract: contract,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
     exporter = WeComDatabasePackageExporter(
       contract: contract,
@@ -130,6 +135,10 @@ void main() {
     final exported = await exporter.export(
       basePackage: basePackage,
       overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
       destinationDirectory: destinationDirectory,
     );
 
@@ -174,6 +183,10 @@ void main() {
       exporter.export(
         basePackage: basePackage,
         overlayDatabase: overlayDatabase,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
         destinationDirectory: destinationDirectory,
       ),
       throwsA(
@@ -187,6 +200,38 @@ void main() {
 
     expect(await destinationDirectory.exists(), isFalse);
     expect(await _snapshotPackage(basePackage), baseBefore);
+  });
+
+  test('ignores revisions owned by another identity', () async {
+    final otherIdentityCommands = WeComOverlayCommandService(
+      overlayDatabase: overlayDatabase,
+      contract: contract,
+      identityScope: const WeComIdentityScope(
+        corporationId: 200,
+        userId: 2,
+      ),
+    );
+    await otherIdentityCommands.upsert(
+      datasetId: basePackage.datasetId,
+      databaseName: 'user.db',
+      tableName: 'user_dept_tableV2',
+      rowKey: const {'user_id': 1, 'department_id': 10},
+      values: const {'status': 1},
+    );
+
+    final exported = await exporter.export(
+      basePackage: basePackage,
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
+      destinationDirectory: destinationDirectory,
+    );
+
+    expect(exported.appliedRevisionCount, 0);
+    expect(exported.lastAppliedRevisionId, isNull);
+    expect(exported.datasetId, basePackage.datasetId);
   });
 
   test('constraint failures leave the base and destination unchanged',
@@ -204,6 +249,10 @@ void main() {
       exporter.export(
         basePackage: basePackage,
         overlayDatabase: overlayDatabase,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
         destinationDirectory: destinationDirectory,
       ),
       throwsA(
@@ -233,6 +282,8 @@ void main() {
       WeComOverlaySchema.operationsTable,
       {
         'dataset_id': basePackage.datasetId,
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
         'database_name': 'user.db',
         'table_name': 'user_table',
         'row_key_json': '{not-json',
@@ -246,6 +297,10 @@ void main() {
       exporter.export(
         basePackage: basePackage,
         overlayDatabase: overlayDatabase,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
         destinationDirectory: destinationDirectory,
       ),
       throwsA(

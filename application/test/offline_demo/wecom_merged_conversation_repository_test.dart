@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
@@ -52,9 +53,17 @@ void main() {
     commands = WeComOverlayCommandService(
       overlayDatabase: overlayDatabase,
       contract: contract,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
     );
     repository = WeComMergedConversationRepository(
       datasetId: datasetId,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
       baseRepository: WeComConversationRepository(baseDatabase),
       overlayDatabase: overlayDatabase,
     );
@@ -219,6 +228,21 @@ void main() {
       rowKey: const {'con_numeric_id': 1},
       values: const {'roomname_remark': 'Other dataset'},
     );
+    final otherIdentity = WeComOverlayCommandService(
+      overlayDatabase: overlayDatabase,
+      contract: contract,
+      identityScope: const WeComIdentityScope(
+        corporationId: 200,
+        userId: 2,
+      ),
+    );
+    await otherIdentity.upsert(
+      datasetId: datasetId,
+      databaseName: 'session.db',
+      tableName: 'conversation_table',
+      rowKey: const {'con_numeric_id': 1},
+      values: const {'roomname_remark': 'Other identity'},
+    );
 
     final conversations = await repository.listConversations();
     expect(conversations.first.displayName, 'Base one');
@@ -361,6 +385,8 @@ void main() {
       WeComOverlaySchema.operationsTable,
       {
         'dataset_id': datasetId,
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
         'database_name': 'session.db',
         'table_name': 'conversation_table',
         'row_key_json': '[]',

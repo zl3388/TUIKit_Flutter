@@ -137,6 +137,7 @@ class WeComIncrementalMigrationService {
       oldBasePackage: oldBasePackage,
       newBasePackage: newBasePackage,
       overlayDatabase: _overlayDatabase,
+      identityScope: identity.scope,
     );
     return _overlayDatabase.connection.transaction(
       (transaction) => _persistPlan(transaction, plan, identity),
@@ -153,11 +154,25 @@ class WeComIncrementalMigrationService {
     if (mergeId != null && mergeId < 1) {
       throw ArgumentError.value(mergeId, 'mergeId', 'Must be positive');
     }
-    final rows = await _overlayDatabase.connection.query(
-      WeComOverlaySchema.mergeConflictsTable,
-      where: mergeId == null ? null : 'merge_id = ?',
-      whereArgs: mergeId == null ? null : [mergeId],
-      orderBy: 'conflict_id',
+    final active = await _readActiveActivation(_overlayDatabase.connection);
+    if (active?.corporationId == null || active?.userId == null) {
+      throw const WeComIncrementalMigrationException(
+        WeComIncrementalMigrationIssueCode.activeIdentityRequired,
+        'Listing merge conflicts requires an active dataset identity',
+      );
+    }
+    final rows = await _overlayDatabase.connection.rawQuery(
+      'SELECT c.* FROM ${WeComOverlaySchema.mergeConflictsTable} c '
+      'JOIN ${WeComOverlaySchema.mergeAttemptsTable} a '
+      'ON a.merge_id = c.merge_id '
+      'WHERE a.identity_corp_id = ? AND a.identity_user_id = ? '
+      '${mergeId == null ? '' : 'AND c.merge_id = ? '}'
+      'ORDER BY c.conflict_id',
+      [
+        active!.corporationId,
+        active.userId,
+        if (mergeId != null) mergeId,
+      ],
     );
     try {
       return List.unmodifiable(rows.map(_decodeConflict));
@@ -178,6 +193,7 @@ class WeComIncrementalMigrationService {
     final sourceRevisionCount = await _operationCount(
       transaction,
       plan.oldDatasetId,
+      plan.identityScope,
     );
     if (sourceRevisionCount != plan.sourceRevisionCount) {
       throw const WeComIncrementalMigrationException(
@@ -196,7 +212,9 @@ class WeComIncrementalMigrationService {
       );
     }
     if (activeActivation!.corporationId != validatedIdentity.corporationId ||
-        activeActivation.userId != validatedIdentity.userId) {
+        activeActivation.userId != validatedIdentity.userId ||
+        plan.identityScope.corporationId != validatedIdentity.corporationId ||
+        plan.identityScope.userId != validatedIdentity.userId) {
       throw const WeComIncrementalMigrationException(
         WeComIncrementalMigrationIssueCode.activeDatasetMismatch,
         'Active dataset identity changed during incremental migration',
@@ -204,9 +222,12 @@ class WeComIncrementalMigrationService {
     }
     final existing = await transaction.query(
       WeComOverlaySchema.mergeAttemptsTable,
-      where: 'old_dataset_id = ? AND new_dataset_id = ? '
+      where: 'identity_corp_id = ? AND identity_user_id = ? '
+          'AND old_dataset_id = ? AND new_dataset_id = ? '
           'AND source_revision_count = ?',
       whereArgs: [
+        plan.identityScope.corporationId,
+        plan.identityScope.userId,
         plan.oldDatasetId,
         plan.newDatasetId,
         plan.sourceRevisionCount,
@@ -228,7 +249,12 @@ class WeComIncrementalMigrationService {
         'Active dataset is not the merge source: $activeDatasetId',
       );
     }
-    if (await _operationCount(transaction, plan.newDatasetId) != 0) {
+    if (await _operationCount(
+          transaction,
+          plan.newDatasetId,
+          plan.identityScope,
+        ) !=
+        0) {
       throw const WeComIncrementalMigrationException(
         WeComIncrementalMigrationIssueCode.targetOverlayNotEmpty,
         'Target dataset already has overlay revisions',
@@ -283,6 +309,8 @@ class WeComIncrementalMigrationService {
         WeComOverlaySchema.operationsTable,
         {
           'dataset_id': plan.newDatasetId,
+          'identity_corp_id': plan.identityScope.corporationId,
+          'identity_user_id': plan.identityScope.userId,
           'database_name': operation.databaseName,
           'table_name': operation.tableName,
           'row_key_json': jsonEncode(operation.rowKey),
@@ -343,6 +371,8 @@ class WeComIncrementalMigrationService {
       {
         'old_dataset_id': plan.oldDatasetId,
         'new_dataset_id': plan.newDatasetId,
+        'identity_corp_id': plan.identityScope.corporationId,
+        'identity_user_id': plan.identityScope.userId,
         'source_revision_count': plan.sourceRevisionCount,
         'status': status.name,
         'first_applied_revision_id': firstRevisionId,
@@ -376,6 +406,8 @@ class WeComIncrementalMigrationService {
             'activation_id',
             'previous_dataset_id',
             'dataset_id',
+            'current_corp_id',
+            'current_user_id',
           ],
           where: 'merge_id = ?',
           whereArgs: [mergeId],
@@ -383,7 +415,11 @@ class WeComIncrementalMigrationService {
         );
         if (activations.length != 1 ||
             activations.single['previous_dataset_id'] != plan.oldDatasetId ||
-            activations.single['dataset_id'] != plan.newDatasetId) {
+            activations.single['dataset_id'] != plan.newDatasetId ||
+            activations.single['current_corp_id'] !=
+                plan.identityScope.corporationId ||
+            activations.single['current_user_id'] !=
+                plan.identityScope.userId) {
           throw StateError('Applied merge activation is missing');
         }
         activationId = activations.single['activation_id']! as int;
@@ -438,12 +474,18 @@ class WeComIncrementalMigrationService {
   Future<int> _operationCount(
     DatabaseExecutor executor,
     String datasetId,
+    WeComIdentityScope identityScope,
   ) async {
     return Sqflite.firstIntValue(
           await executor.rawQuery(
             'SELECT COUNT(*) FROM ${WeComOverlaySchema.operationsTable} '
-            'WHERE dataset_id = ?',
-            [datasetId],
+            'WHERE dataset_id = ? AND identity_corp_id = ? '
+            'AND identity_user_id = ?',
+            [
+              datasetId,
+              identityScope.corporationId,
+              identityScope.userId,
+            ],
           ),
         ) ??
         0;

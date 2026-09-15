@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import 'wecom_database_package.dart';
+import 'wecom_identity_repository.dart';
 import 'wecom_overlay_contract_validator.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
@@ -82,6 +83,7 @@ class WeComDatabasePackageExporter {
   Future<WeComExportedPackage> export({
     required WeComImportedPackage basePackage,
     required WeComOverlayDatabase overlayDatabase,
+    required WeComIdentityScope identityScope,
     required Directory destinationDirectory,
   }) async {
     final basePath = p.normalize(p.absolute(basePackage.directory.path));
@@ -106,6 +108,7 @@ class WeComDatabasePackageExporter {
     final operations = await _readOperations(
       overlayDatabase,
       basePackage.datasetId,
+      identityScope,
     );
 
     final parent = Directory(p.dirname(destinationPath));
@@ -173,11 +176,18 @@ class WeComDatabasePackageExporter {
   Future<List<_ExportOperation>> _readOperations(
     WeComOverlayDatabase overlayDatabase,
     String datasetId,
+    WeComIdentityScope identityScope,
   ) async {
+    identityScope.validate();
     final rows = await overlayDatabase.connection.query(
       WeComOverlaySchema.operationsTable,
-      where: 'dataset_id = ?',
-      whereArgs: [datasetId],
+      where: 'dataset_id = ? AND identity_corp_id = ? '
+          'AND identity_user_id = ?',
+      whereArgs: [
+        datasetId,
+        identityScope.corporationId,
+        identityScope.userId,
+      ],
       orderBy: 'revision_id',
     );
     final operations = <_ExportOperation>[];

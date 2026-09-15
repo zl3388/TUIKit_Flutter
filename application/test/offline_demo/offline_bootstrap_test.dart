@@ -255,6 +255,8 @@ Future<WeComImportedPackage> _importAndActivate({
       WeComOverlaySchema.operationsTable,
       {
         'dataset_id': imported.datasetId,
+        'identity_corp_id': testCorporationId,
+        'identity_user_id': testCurrentUserId,
         'database_name': 'user.db',
         'table_name': 'user_table',
         'row_key_json': '{"id":1}',

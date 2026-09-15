@@ -318,11 +318,13 @@ class WeComActiveDatasetResolver {
         package: package,
         directory: WeComMergedDirectoryRepository(
           datasetId: package.datasetId,
+          identityScope: identity.scope,
           baseRepository: WeComDirectoryRepository(userDatabase),
           overlayDatabase: _overlayDatabase,
         ),
         conversations: WeComMergedConversationRepository(
           datasetId: package.datasetId,
+          identityScope: identity.scope,
           baseRepository: WeComConversationRepository(sessionDatabase),
           overlayDatabase: _overlayDatabase,
         ),

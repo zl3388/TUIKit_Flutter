@@ -38,6 +38,10 @@ void main() {
     commands = WeComOverlayCommandService(
       overlayDatabase: overlayDatabase,
       contract: contract,
+      identityScope: const WeComIdentityScope(
+        corporationId: testCorporationId,
+        userId: testCurrentUserId,
+      ),
     );
     migrations = WeComIncrementalMigrationService(
       overlayDatabase: overlayDatabase,
@@ -279,6 +283,8 @@ void main() {
       {
         'old_dataset_id': packages.newPackage.datasetId,
         'new_dataset_id': laterDataset,
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
         'source_revision_count': 1,
         'status': WeComIncrementalMigrationStatus.applied.name,
         'first_applied_revision_id': null,

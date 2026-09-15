@@ -103,6 +103,8 @@ void main() {
       WeComOverlaySchema.operationsTable,
       {
         'dataset_id': initial.datasetId,
+        'identity_corp_id': testCorporationId,
+        'identity_user_id': testCurrentUserId,
         'database_name': 'user.db',
         'table_name': 'user_table',
         'row_key_json': '{"id":1}',
@@ -171,6 +173,20 @@ void main() {
       imported.datasetId,
       selectedCorporationId: testCorporationId,
     );
+    await overlayDatabase.connection.insert(
+      WeComOverlaySchema.operationsTable,
+      {
+        'dataset_id': imported.datasetId,
+        'identity_corp_id': testCorporationId,
+        'identity_user_id': testCurrentUserId,
+        'database_name': 'user.db',
+        'table_name': 'user_table',
+        'row_key_json': '{"id":1}',
+        'operation': 'upsert',
+        'values_json': '{"name":"First identity overlay"}',
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
     await resolver.selectCorporation(
       datasetId: imported.datasetId,
       corporationId: 200,
@@ -179,6 +195,12 @@ void main() {
 
     final runtime = await resolver.openActive();
     expect((await runtime.identity.currentProfile()).id, '2');
+    expect(
+      (await runtime.directory.listInternalContacts())
+          .singleWhere((contact) => contact.id == 1)
+          .displayName,
+      'First user',
+    );
     await runtime.close();
   });
 

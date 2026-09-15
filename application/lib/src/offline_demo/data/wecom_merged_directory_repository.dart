@@ -2,12 +2,14 @@ import 'dart:convert';
 
 import '../domain/wecom_directory_models.dart';
 import 'wecom_directory_repository.dart';
+import 'wecom_identity_repository.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
 
 class WeComMergedDirectoryRepository {
   const WeComMergedDirectoryRepository({
     required this.datasetId,
+    required this.identityScope,
     required WeComDirectoryRepository baseRepository,
     required WeComOverlayDatabase overlayDatabase,
   })  : _baseRepository = baseRepository,
@@ -17,6 +19,7 @@ class WeComMergedDirectoryRepository {
   static const _tableName = 'user_table';
 
   final String datasetId;
+  final WeComIdentityScope identityScope;
   final WeComDirectoryRepository _baseRepository;
   final WeComOverlayDatabase _overlayDatabase;
 
@@ -69,8 +72,15 @@ class WeComMergedDirectoryRepository {
     final operations = await _overlayDatabase.connection.query(
       WeComOverlaySchema.operationsTable,
       columns: ['row_key_json', 'operation', 'values_json'],
-      where: 'dataset_id = ? AND database_name = ? AND table_name = ?',
-      whereArgs: [datasetId, _databaseName, _tableName],
+      where: 'dataset_id = ? AND identity_corp_id = ? '
+          'AND identity_user_id = ? AND database_name = ? AND table_name = ?',
+      whereArgs: [
+        datasetId,
+        identityScope.corporationId,
+        identityScope.userId,
+        _databaseName,
+        _tableName,
+      ],
       orderBy: 'revision_id',
     );
 

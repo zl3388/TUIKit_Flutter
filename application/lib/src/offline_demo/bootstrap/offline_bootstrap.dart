@@ -108,6 +108,7 @@ abstract final class OfflineBootstrap {
           commands: WeComOverlayCommandService(
             overlayDatabase: overlayDatabase,
             contract: contract,
+            identityScope: runtime.identity.identity.scope,
           ),
           media: runtime.media,
         );

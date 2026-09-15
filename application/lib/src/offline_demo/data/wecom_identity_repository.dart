@@ -46,9 +46,30 @@ class WeComDatasetIdentity {
   final String corporationShortName;
   final String corporationFullName;
 
+  WeComIdentityScope get scope => WeComIdentityScope(
+        corporationId: corporationId,
+        userId: userId,
+      );
+
   String get corporationName => corporationFullName.isNotEmpty
       ? corporationFullName
       : corporationShortName;
+}
+
+class WeComIdentityScope {
+  const WeComIdentityScope({
+    required this.corporationId,
+    required this.userId,
+  });
+
+  final int corporationId;
+  final int userId;
+
+  void validate() {
+    if (corporationId <= 0 || userId <= 0) {
+      throw ArgumentError('Identity scope IDs must be positive');
+    }
+  }
 }
 
 class WeComIdentityResolution {

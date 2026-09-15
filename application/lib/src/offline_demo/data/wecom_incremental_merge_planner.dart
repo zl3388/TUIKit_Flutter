@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'wecom_database_package.dart';
+import 'wecom_identity_repository.dart';
 import 'wecom_overlay_contract_validator.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
@@ -104,6 +105,7 @@ class WeComIncrementalMergePlan {
   WeComIncrementalMergePlan({
     required this.oldDatasetId,
     required this.newDatasetId,
+    required this.identityScope,
     required this.sourceRevisionCount,
     required List<WeComPlannedOverlayOperation> operations,
     required List<WeComIncrementalMergeConflict> conflicts,
@@ -112,6 +114,7 @@ class WeComIncrementalMergePlan {
 
   final String oldDatasetId;
   final String newDatasetId;
+  final WeComIdentityScope identityScope;
   final int sourceRevisionCount;
   final List<WeComPlannedOverlayOperation> operations;
   final List<WeComIncrementalMergeConflict> conflicts;
@@ -186,7 +189,9 @@ class WeComIncrementalMergePlanner {
     required WeComImportedPackage oldBasePackage,
     required WeComImportedPackage newBasePackage,
     required WeComOverlayDatabase overlayDatabase,
+    required WeComIdentityScope identityScope,
   }) async {
+    identityScope.validate();
     if (oldBasePackage.datasetId == newBasePackage.datasetId) {
       throw const WeComIncrementalMergeException(
         WeComIncrementalMergeIssueCode.sameDataset,
@@ -199,8 +204,13 @@ class WeComIncrementalMergePlanner {
 
     final rows = await overlayDatabase.connection.query(
       WeComOverlaySchema.operationsTable,
-      where: 'dataset_id = ?',
-      whereArgs: [oldBasePackage.datasetId],
+      where: 'dataset_id = ? AND identity_corp_id = ? '
+          'AND identity_user_id = ?',
+      whereArgs: [
+        oldBasePackage.datasetId,
+        identityScope.corporationId,
+        identityScope.userId,
+      ],
       orderBy: 'revision_id',
     );
     final groups = <String, _RowChange>{};
@@ -262,6 +272,7 @@ class WeComIncrementalMergePlanner {
     return WeComIncrementalMergePlan(
       oldDatasetId: oldBasePackage.datasetId,
       newDatasetId: newBasePackage.datasetId,
+      identityScope: identityScope,
       sourceRevisionCount: rows.length,
       operations: plannedOperations,
       conflicts: conflicts,

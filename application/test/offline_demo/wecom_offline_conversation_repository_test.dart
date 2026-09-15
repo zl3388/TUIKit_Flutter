@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_media_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_message_repository.dart';
@@ -151,6 +152,10 @@ void main() {
       currentUserId: 1,
       conversations: WeComMergedConversationRepository(
         datasetId: datasetId,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
         baseRepository: WeComConversationRepository(baseDatabase),
         overlayDatabase: overlayDatabase,
       ),
@@ -162,6 +167,10 @@ void main() {
       commands: WeComOverlayCommandService(
         overlayDatabase: overlayDatabase,
         contract: contract,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
       ),
     );
   });
@@ -322,6 +331,10 @@ CREATE TABLE mapping (
       currentUserId: 1,
       conversations: WeComMergedConversationRepository(
         datasetId: datasetId,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
         baseRepository: WeComConversationRepository(baseDatabase),
         overlayDatabase: overlayDatabase,
       ),
@@ -341,6 +354,10 @@ CREATE TABLE mapping (
               'wecom_schema_contract.json',
             ),
           ).readAsString(),
+        ),
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
         ),
       ),
       media: WeComMediaRepository(

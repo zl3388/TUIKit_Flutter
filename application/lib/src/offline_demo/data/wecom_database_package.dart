@@ -433,7 +433,7 @@ class WeComDatabasePackageImporter {
       }
       if (size > 0 &&
           (!await _hasSqliteHeader(sourceFile) ||
-              await _walFile(sourceFile).exists() ||
+              await _hasEffectiveWal(sourceFile) ||
               (await _privateFtsSql(sourceFile, database)).isNotEmpty)) {
         return _importPreprocessedPackage(
           sourceDirectory: sourceDirectory,
@@ -454,7 +454,7 @@ class WeComDatabasePackageImporter {
     }
 
     for (final input in prepared) {
-      if (await _walFile(input.sourceFile).exists()) {
+      if (await _hasEffectiveWal(input.sourceFile)) {
         return _importPreprocessedPackage(
           sourceDirectory: sourceDirectory,
           destinationRoot: destinationRoot,
@@ -497,7 +497,7 @@ class WeComDatabasePackageImporter {
     try {
       final manifestFiles = <String, WeComPackageFile>{};
       for (final input in prepared) {
-        await _requireWalAbsent(input.sourceFile, input.contract.fileName);
+        await _requireNoEffectiveWal(input.sourceFile, input.contract.fileName);
         final copiedFile = await input.sourceFile.copy(
           p.join(stagingDirectory.path, input.contract.fileName),
         );
@@ -511,7 +511,7 @@ class WeComDatabasePackageImporter {
           );
         }
 
-        await _requireWalAbsent(input.sourceFile, input.contract.fileName);
+        await _requireNoEffectiveWal(input.sourceFile, input.contract.fileName);
         if (input.sizeBytes > 0) {
           await _validateDatabase(copiedFile, input.contract);
         } else if (input.contract.tables.isNotEmpty ||
@@ -534,7 +534,7 @@ class WeComDatabasePackageImporter {
       }
 
       for (final input in prepared) {
-        if (await _walFile(input.sourceFile).exists() ||
+        if (await _hasEffectiveWal(input.sourceFile) ||
             await _hashFile(input.sourceFile) != input.sha256 ||
             await input.sourceFile.length() != input.sizeBytes) {
           throw WeComPackageException(
@@ -629,15 +629,16 @@ class WeComDatabasePackageImporter {
         }
         final walFile = _walFile(sourceFile);
         final hasWal = await walFile.exists();
+        final hasEffectiveWal = hasWal && await walFile.length() > 0;
         final isPlaintext = size > 0 && await _hasSqliteHeader(sourceFile);
-        if (hasWal && size == 0) {
+        if (hasEffectiveWal && size == 0) {
           throw WeComPackageException(
             WeComPackageIssueCode.walSnapshotFailed,
             'Empty placeholder cannot have a WAL sidecar',
             fileName: database.fileName,
           );
         }
-        if (hasWal && !isPlaintext) {
+        if (hasEffectiveWal && !isPlaintext) {
           throw WeComPackageException(
             WeComPackageIssueCode.encryptedWalUnsupported,
             'Encrypted databases with WAL are not supported',
@@ -653,7 +654,7 @@ class WeComDatabasePackageImporter {
             await _captureSourceSnapshot(sourceFile, database.fileName),
           );
           await preparedFile.create();
-        } else if (hasWal) {
+        } else if (hasEffectiveWal) {
           await _snapshotWalDatabase(
             sourceFile: sourceFile,
             walFile: walFile,
@@ -684,7 +685,7 @@ class WeComDatabasePackageImporter {
               temporaryRawKeyHex: temporaryRawKeyHex,
             );
           }
-          await _requireWalAbsent(sourceFile, database.fileName);
+          await _requireNoEffectiveWal(sourceFile, database.fileName);
         }
         if (size > 0) {
           await _normalizePrivateFts(preparedFile, database);
@@ -706,11 +707,20 @@ class WeComDatabasePackageImporter {
 
   File _walFile(File databaseFile) => File('${databaseFile.path}-wal');
 
-  Future<void> _requireWalAbsent(File databaseFile, String fileName) async {
-    if (await _walFile(databaseFile).exists()) {
+  Future<bool> _hasEffectiveWal(File databaseFile) async {
+    final walFile = _walFile(databaseFile);
+    return await walFile.exists() && await walFile.length() > 0;
+  }
+
+  Future<void> _requireNoEffectiveWal(
+    File databaseFile,
+    String fileName,
+  ) async {
+    if (await _hasEffectiveWal(databaseFile)) {
       throw WeComPackageException(
         WeComPackageIssueCode.sourceChanged,
-        'WAL appeared while the database was being copied; retry import',
+        'A non-empty WAL appeared while the database was being copied; '
+        'retry import',
         fileName: fileName,
       );
     }
@@ -909,7 +919,7 @@ class WeComDatabasePackageImporter {
     List<_SourceSnapshot> snapshots,
   ) async {
     for (final snapshot in snapshots) {
-      if (await _walFile(snapshot.file).exists() ||
+      if (await _hasEffectiveWal(snapshot.file) ||
           !await _matchesSourceSnapshot(snapshot)) {
         throw WeComPackageException(
           WeComPackageIssueCode.sourceChanged,
