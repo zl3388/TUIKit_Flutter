@@ -159,6 +159,34 @@ void main() {
     await tester.pump();
     expect(opener.opened, hasLength(1));
   });
+
+  testWidgets('labels evidence-backed message progress icons', (tester) async {
+    final store = OfflineDemoStore(
+      OfflineRepositoryBundle(
+        conversationRepository: const _ReadOnlyMessageRepository(
+          exposeProgress: true,
+        ),
+      ),
+    );
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ConversationPage(
+          conversation: _conversation,
+          currentProfileId: '1',
+          store: store,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('media-message-4')),
+      160,
+    );
+
+    expect(find.byTooltip('2 人已读'), findsOneWidget);
+    expect(find.byIcon(Icons.done_all_rounded), findsOneWidget);
+  });
 }
 
 const _conversation = OfflineConversation(
@@ -177,10 +205,12 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
   const _ReadOnlyMessageRepository({
     this.longFileName = false,
     this.exposeAttachments = false,
+    this.exposeProgress = false,
   });
 
   final bool longFileName;
   final bool exposeAttachments;
+  final bool exposeProgress;
 
   @override
   bool get isAvailable => true;
@@ -265,6 +295,13 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
           sentAt: DateTime.fromMillisecondsSinceEpoch(4000, isUtc: true),
           status: '',
           isRecalled: false,
+          progress: exposeProgress
+              ? OfflineMessageProgress.peerRead
+              : OfflineMessageProgress.none,
+          progressSource: exposeProgress
+              ? OfflineMessageProgressSource.weComObservation
+              : OfflineMessageProgressSource.none,
+          peerReaderCount: exposeProgress ? 2 : 0,
         ),
         OfflineMessage(
           id: '5',

@@ -44,6 +44,19 @@ void main() {
           sendTime: 20,
           flag: 131074,
           content: _bytes('0A0C080012080A06E5A5BDE79A84'),
+          readState: _bytes('08ba99d9c38e808003'),
+        ),
+        TestWeComMessage(
+          messageId: 3,
+          serverId: 0,
+          sequence: 30,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 30,
+          flag: 131074,
+          content: _bytes('0A09080012050A03E7AD89'),
+          clientId: 'local-client-id',
+          inRetryQueue: true,
         ),
       ],
     );
@@ -70,16 +83,20 @@ void main() {
   test('reads indexed messages in ascending sequence order', () async {
     final messages = await repository.listConversationMessages(7);
 
-    expect(messages.map((message) => message.messageId), [1, 2]);
-    expect(messages.map((message) => message.sequence), [10, 20]);
+    expect(messages.map((message) => message.messageId), [1, 2, 3]);
+    expect(messages.map((message) => message.sequence), [10, 20, 30]);
     expect(
       decodeWeComTextMessage(messages.first.content!),
       '再',
     );
     expect(
-      decodeWeComTextMessage(messages.last.content!),
+      decodeWeComTextMessage(messages[1].content!),
       '好的',
     );
+    expect(messages[1].readStateContent, _bytes('08ba99d9c38e808003'));
+    expect(messages.last.serverId, 0);
+    expect(messages.last.hasClientTracking, isTrue);
+    expect(messages.last.isInRetryQueue, isTrue);
   });
 
   test('ignores lookup rows whose message row no longer exists', () async {
@@ -93,7 +110,7 @@ void main() {
 
     final messages = await repository.listConversationMessages(7);
 
-    expect(messages.map((message) => message.messageId), [1, 2]);
+    expect(messages.map((message) => message.messageId), [1, 2, 3]);
   });
 
   test('decodes all confirmed text and emoji items only', () {

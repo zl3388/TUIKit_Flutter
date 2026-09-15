@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_media_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_message_repository.dart';
@@ -106,6 +107,10 @@ void main() {
           conversationId: 'S:1_2',
           sendTime: 20,
           flag: 131074,
+          readState: [
+            0x08,
+            0x02,
+          ],
           content: [
             0x0a,
             0x0c,
@@ -121,6 +126,53 @@ void main() {
             0xe7,
             0x9a,
             0x84,
+          ],
+        ),
+        TestWeComMessage(
+          messageId: 4,
+          serverId: 104,
+          sequence: 40,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 40,
+          flag: 131074,
+          readState: [0x10, 0x02],
+          content: [
+            0x0a,
+            0x09,
+            0x08,
+            0x00,
+            0x12,
+            0x05,
+            0x0a,
+            0x03,
+            0xe7,
+            0xa1,
+            0xae,
+          ],
+        ),
+        TestWeComMessage(
+          messageId: 5,
+          serverId: 0,
+          sequence: 50,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 50,
+          flag: 131074,
+          clientId: 'pending-client-id',
+          inRetryQueue: true,
+          content: [
+            0x0a,
+            0x09,
+            0x08,
+            0x00,
+            0x12,
+            0x05,
+            0x0a,
+            0x03,
+            0xe7,
+            0xad,
+            0x89,
           ],
         ),
       ],
@@ -224,12 +276,30 @@ void main() {
     final messages = await repository.listMessages('S:1_2');
     expect(
       messages.map((message) => message.text),
-      ['再', '好的', '[通话] 对方已取消'],
+      ['再', '好的', '[通话] 对方已取消', '确', '等'],
     );
-    expect(messages.map((message) => message.kind), ['text', 'text', 'call']);
+    expect(
+      messages.map((message) => message.kind),
+      ['text', 'text', 'call', 'text', 'text'],
+    );
     expect(messages.first.senderName, 'Peer');
     expect(messages[1].senderName, 'Current user');
-    expect(messages.last.senderName, 'Peer');
+    expect(messages[1].progress, OfflineMessageProgress.peerRead);
+    expect(
+      messages[1].progressSource,
+      OfflineMessageProgressSource.weComObservation,
+    );
+    expect(messages[1].peerReaderCount, 1);
+    expect(messages[2].senderName, 'Peer');
+    expect(
+      messages[3].progress,
+      OfflineMessageProgress.serverAcknowledged,
+    );
+    expect(
+      messages[4].progress,
+      OfflineMessageProgress.waitingForServer,
+    );
+    expect(messages.last.senderName, 'Current user');
     expect(messages.last.status, isEmpty);
 
     await expectLater(
@@ -274,6 +344,117 @@ void main() {
     await expectLater(
       repository.deleteConversation('S:1_2'),
       throwsA(isA<UnsupportedError>()),
+    );
+  });
+
+  test('simulates send acknowledgement, peer read, and automatic reply locally',
+      () async {
+    var now = DateTime.utc(2026, 9, 15, 8);
+    final simulation = WeComLocalSimulationRepository(
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
+      now: () => now,
+    );
+    repository = WeComOfflineConversationRepository(
+      datasetId: datasetId,
+      currentUserId: 1,
+      conversations: WeComMergedConversationRepository(
+        datasetId: datasetId,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
+        baseRepository: WeComConversationRepository(baseDatabase),
+        overlayDatabase: overlayDatabase,
+      ),
+      messages: WeComMessageRepository(
+        messageDatabase: messageDatabase,
+        lookupDatabase: lookupDatabase,
+      ),
+      contacts: const _FixtureContacts(),
+      commands: WeComOverlayCommandService(
+        overlayDatabase: overlayDatabase,
+        contract: WeComPackageContract.fromJsonString(
+          await File(
+            p.join(
+              Directory.current.path,
+              'assets',
+              'offline_demo',
+              'wecom_schema_contract.json',
+            ),
+          ).readAsString(),
+        ),
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
+      ),
+      simulation: simulation,
+    );
+
+    expect(repository.features, contains(ConversationFeature.sendText));
+    final sent = await repository.sendTextMessage(
+      conversationId: 'S:1_2',
+      senderProfileId: '1',
+      text: ' local only ',
+    );
+    expect(sent.text, 'local only');
+    expect(sent.progress, OfflineMessageProgress.waitingForServer);
+    expect(
+      sent.progressSource,
+      OfflineMessageProgressSource.localSimulation,
+    );
+
+    now = now.add(const Duration(milliseconds: 900));
+    var messages = await repository.listMessages('S:1_2');
+    expect(messages.last.text, 'local only');
+    expect(
+      messages.last.progress,
+      OfflineMessageProgress.serverAcknowledged,
+    );
+
+    now = now.add(const Duration(milliseconds: 1000));
+    messages = await repository.listMessages('S:1_2');
+    expect(messages.last.progress, OfflineMessageProgress.peerRead);
+    expect(messages.last.peerReaderCount, 1);
+
+    now = now.add(const Duration(milliseconds: 1200));
+    messages = await repository.listMessages('S:1_2');
+    expect(messages.map((message) => message.text).toList(), [
+      '再',
+      '好的',
+      '[通话] 对方已取消',
+      '确',
+      '等',
+      'local only',
+      '收到',
+    ]);
+    expect(messages.last.senderProfileId, '2');
+    expect(
+      messages.last.progressSource,
+      OfflineMessageProgressSource.localSimulation,
+    );
+    final conversation = (await repository.listConversations())
+        .singleWhere((item) => item.id == 'S:1_2');
+    expect(conversation.lastMessagePreview, '收到');
+    final sourceCount = await messageDatabase.rawQuery(
+      'SELECT COUNT(*) AS count FROM message_table',
+    );
+    expect(sourceCount.single['count'], 5);
+    expect(
+      await overlayDatabase.connection.query(
+        WeComOverlaySchema.operationsTable,
+      ),
+      isEmpty,
+    );
+    expect(
+      await overlayDatabase.connection.query(
+        WeComOverlaySchema.simulationEventsTable,
+      ),
+      hasLength(1),
     );
   });
 

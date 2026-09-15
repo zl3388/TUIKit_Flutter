@@ -146,6 +146,19 @@ class OfflineConversationMember {
   final DateTime? joinedAt;
 }
 
+enum OfflineMessageProgress {
+  none,
+  waitingForServer,
+  serverAcknowledged,
+  peerRead,
+}
+
+enum OfflineMessageProgressSource {
+  none,
+  weComObservation,
+  localSimulation,
+}
+
 class OfflineMessage {
   const OfflineMessage({
     required this.id,
@@ -158,6 +171,10 @@ class OfflineMessage {
     required this.status,
     required this.isRecalled,
     this.replyToMessageId,
+    this.progress = OfflineMessageProgress.none,
+    this.progressSource = OfflineMessageProgressSource.none,
+    this.peerReaderCount = 0,
+    this.nextProgressAt,
   });
 
   final String id;
@@ -170,6 +187,10 @@ class OfflineMessage {
   final String status;
   final bool isRecalled;
   final String? replyToMessageId;
+  final OfflineMessageProgress progress;
+  final OfflineMessageProgressSource progressSource;
+  final int peerReaderCount;
+  final DateTime? nextProgressAt;
 
   factory OfflineMessage.fromRow(Map<String, Object?> row) => OfflineMessage(
         id: row['id']! as String,

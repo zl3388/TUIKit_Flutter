@@ -108,12 +108,119 @@ void main() {
         'created_at_micros',
       ],
     );
+    expect(
+      await _columnNames(database, WeComOverlaySchema.simulationEventsTable),
+      [
+        'event_id',
+        'identity_corp_id',
+        'identity_user_id',
+        'event_key',
+        'event_type',
+        'payload_json',
+        'reverts_event_id',
+        'created_at_micros',
+      ],
+    );
     expect(await database.connection.getVersion(), WeComOverlaySchema.version);
     expect(
       Sqflite.firstIntValue(
         await database.connection.rawQuery('PRAGMA foreign_keys'),
       ),
       1,
+    );
+  });
+
+  test('keeps simulation events identity-scoped and append-only', () async {
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final eventId = await database.connection.insert(
+      WeComOverlaySchema.simulationEventsTable,
+      {
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
+        'event_key': 'event-1',
+        'event_type': 'textExchange',
+        'payload_json': '{}',
+        'reverts_event_id': null,
+        'created_at_micros': 1,
+      },
+    );
+
+    await expectLater(
+      database.connection.update(
+        WeComOverlaySchema.simulationEventsTable,
+        {'payload_json': '{"changed":true}'},
+        where: 'event_id = ?',
+        whereArgs: [eventId],
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    await database.connection.insert(
+      WeComOverlaySchema.simulationEventsTable,
+      {
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
+        'event_key': 'cancel-1',
+        'event_type': 'cancelExchange',
+        'payload_json': '{"version":1}',
+        'reverts_event_id': eventId,
+        'created_at_micros': 2,
+      },
+    );
+    await expectLater(
+      database.connection.insert(
+        WeComOverlaySchema.simulationEventsTable,
+        {
+          'identity_corp_id': 100,
+          'identity_user_id': 1,
+          'event_key': 'cancel-2',
+          'event_type': 'cancelExchange',
+          'payload_json': '{"version":1}',
+          'reverts_event_id': eventId,
+          'created_at_micros': 3,
+        },
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      database.connection.insert(
+        WeComOverlaySchema.simulationEventsTable,
+        {
+          'identity_corp_id': 200,
+          'identity_user_id': 2,
+          'event_key': 'cross-identity-cancel',
+          'event_type': 'cancelExchange',
+          'payload_json': '{"version":1}',
+          'reverts_event_id': eventId,
+          'created_at_micros': 4,
+        },
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      database.connection.delete(
+        WeComOverlaySchema.simulationEventsTable,
+        where: 'event_id = ?',
+        whereArgs: [eventId],
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      database.connection.insert(
+        WeComOverlaySchema.simulationEventsTable,
+        {
+          'identity_corp_id': 100,
+          'identity_user_id': 1,
+          'event_key': 'event-1',
+          'event_type': 'textExchange',
+          'payload_json': '{}',
+          'created_at_micros': 2,
+        },
+      ),
+      throwsA(isA<DatabaseException>()),
     );
   });
 
@@ -458,6 +565,38 @@ void main() {
     expect(operation['identity_user_id'], 1);
   });
 
+  test('upgrades version 4 by adding empty simulation metadata', () async {
+    final rawDatabase = await _openVersion4Database(databasePath);
+    await rawDatabase.insert(WeComOverlaySchema.operationsTable, {
+      'dataset_id': datasetId,
+      'identity_corp_id': 100,
+      'identity_user_id': 1,
+      'database_name': 'user.db',
+      'table_name': 'user_table',
+      'row_key_json': '{"id":1}',
+      'operation': 'upsert',
+      'values_json': '{"name":"preserved"}',
+      'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+    });
+    await rawDatabase.close();
+
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+
+    expect(await database.connection.getVersion(), WeComOverlaySchema.version);
+    expect(
+      await database.connection.query(WeComOverlaySchema.operationsTable),
+      hasLength(1),
+    );
+    expect(
+      await database.connection.query(WeComOverlaySchema.simulationEventsTable),
+      isEmpty,
+    );
+  });
+
   test('does not assign ambiguous version 3 operations to an identity',
       () async {
     final rawDatabase = await _openVersion3Database(databasePath);
@@ -589,6 +728,28 @@ Future<Database> _openVersion3Database(String databasePath) {
           await database.execute(statement);
         }
         for (final statement in WeComOverlaySchema.version3UpgradeStatements) {
+          await database.execute(statement);
+        }
+      },
+    ),
+  );
+}
+
+Future<Database> _openVersion4Database(String databasePath) {
+  return databaseFactoryFfi.openDatabase(
+    databasePath,
+    options: OpenDatabaseOptions(
+      version: 4,
+      singleInstance: false,
+      onCreate: (database, version) async {
+        await WeComOverlaySchema.createVersion1(database);
+        for (final statement in WeComOverlaySchema.version2CreateStatements) {
+          await database.execute(statement);
+        }
+        for (final statement in WeComOverlaySchema.version3UpgradeStatements) {
+          await database.execute(statement);
+        }
+        for (final statement in WeComOverlaySchema.version4UpgradeStatements) {
           await database.execute(statement);
         }
       },

@@ -1,16 +1,20 @@
 import 'package:sqflite/sqflite.dart';
 
 abstract final class WeComOverlaySchema {
-  static const version = 4;
+  static const version = 5;
 
   static const operationsTable = 'overlay_operations';
   static const mergeAttemptsTable = 'overlay_merge_attempts';
   static const mergeConflictsTable = 'overlay_merge_conflicts';
   static const datasetActivationsTable = 'overlay_dataset_activations';
+  static const simulationEventsTable = 'overlay_simulation_events';
 
   static const targetIndex = 'idx_overlay_operations_target';
   static const mergeIdentityIndex = 'idx_overlay_merge_attempts_identity';
   static const conflictAttemptIndex = 'idx_overlay_merge_conflicts_attempt';
+  static const simulationIdentityIndex =
+      'idx_overlay_simulation_events_identity';
+  static const simulationRevertIndex = 'idx_overlay_simulation_events_revert';
 
   static const noUpdateTrigger = 'trg_overlay_operations_no_update';
   static const noDeleteTrigger = 'trg_overlay_operations_no_delete';
@@ -30,17 +34,26 @@ abstract final class WeComOverlaySchema {
       'trg_overlay_dataset_activations_no_update';
   static const activationNoDeleteTrigger =
       'trg_overlay_dataset_activations_no_delete';
+  static const simulationNoUpdateTrigger =
+      'trg_overlay_simulation_events_no_update';
+  static const simulationNoDeleteTrigger =
+      'trg_overlay_simulation_events_no_delete';
+  static const simulationRevertScopeTrigger =
+      'trg_overlay_simulation_events_revert_scope';
 
   static const expectedTables = <String>[
     datasetActivationsTable,
     mergeAttemptsTable,
     mergeConflictsTable,
     operationsTable,
+    simulationEventsTable,
   ];
   static const expectedIndexes = <String>[
     mergeIdentityIndex,
     conflictAttemptIndex,
     targetIndex,
+    simulationIdentityIndex,
+    simulationRevertIndex,
   ];
   static const expectedTriggers = <String>[
     activationNoDeleteTrigger,
@@ -53,6 +66,9 @@ abstract final class WeComOverlaySchema {
     identityRequiredTrigger,
     noDeleteTrigger,
     noUpdateTrigger,
+    simulationNoDeleteTrigger,
+    simulationNoUpdateTrigger,
+    simulationRevertScopeTrigger,
   ];
 
   static const version1CreateStatements = <String>[
@@ -508,11 +524,81 @@ END
 ''',
   ];
 
+  static const version5UpgradeStatements = <String>[
+    '''
+CREATE TABLE overlay_simulation_events (
+  event_id INTEGER PRIMARY KEY,
+  identity_corp_id INTEGER NOT NULL CHECK (identity_corp_id > 0),
+  identity_user_id INTEGER NOT NULL CHECK (identity_user_id > 0),
+  event_key TEXT NOT NULL CHECK (length(event_key) > 0),
+  event_type TEXT NOT NULL CHECK (
+    event_type IN ('textExchange', 'cancelExchange')
+  ),
+  payload_json TEXT NOT NULL CHECK (length(payload_json) > 0),
+  reverts_event_id INTEGER
+    REFERENCES overlay_simulation_events(event_id) ON DELETE RESTRICT,
+  created_at_micros INTEGER NOT NULL CHECK (created_at_micros > 0),
+  CHECK (
+    (event_type = 'textExchange' AND reverts_event_id IS NULL) OR
+    (event_type = 'cancelExchange' AND reverts_event_id IS NOT NULL)
+  ),
+  CHECK (reverts_event_id IS NULL OR reverts_event_id < event_id)
+)
+''',
+    '''
+CREATE UNIQUE INDEX idx_overlay_simulation_events_identity
+ON overlay_simulation_events (
+  identity_corp_id,
+  identity_user_id,
+  event_key
+)
+''',
+    '''
+CREATE UNIQUE INDEX idx_overlay_simulation_events_revert
+ON overlay_simulation_events (
+  identity_corp_id,
+  identity_user_id,
+  reverts_event_id
+)
+WHERE reverts_event_id IS NOT NULL
+''',
+    '''
+CREATE TRIGGER trg_overlay_simulation_events_no_update
+BEFORE UPDATE ON overlay_simulation_events
+BEGIN
+  SELECT RAISE(ABORT, 'overlay simulation events are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_simulation_events_no_delete
+BEFORE DELETE ON overlay_simulation_events
+BEGIN
+  SELECT RAISE(ABORT, 'overlay simulation events are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_simulation_events_revert_scope
+BEFORE INSERT ON overlay_simulation_events
+WHEN NEW.event_type = 'cancelExchange' AND NOT EXISTS (
+  SELECT 1
+  FROM overlay_simulation_events AS target
+  WHERE target.event_id = NEW.reverts_event_id
+    AND target.identity_corp_id = NEW.identity_corp_id
+    AND target.identity_user_id = NEW.identity_user_id
+    AND target.event_type = 'textExchange'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'simulation revert must target the same identity');
+END
+''',
+  ];
+
   static const createStatements = <String>[
     ...version1CreateStatements,
     ...version2CreateStatements,
     ...version3UpgradeStatements,
     ...version4UpgradeStatements,
+    ...version5UpgradeStatements,
   ];
 
   static Future<void> createCurrent(Database db) {
@@ -533,16 +619,24 @@ END
         ...version2CreateStatements,
         ...version3UpgradeStatements,
         ...version4UpgradeStatements,
+        ...version5UpgradeStatements,
       ]);
     }
     if (newVersion == version && oldVersion == 2) {
       return _execute(db, [
         ...version3UpgradeStatements,
         ...version4UpgradeStatements,
+        ...version5UpgradeStatements,
       ]);
     }
     if (newVersion == version && oldVersion == 3) {
-      return _execute(db, version4UpgradeStatements);
+      return _execute(db, [
+        ...version4UpgradeStatements,
+        ...version5UpgradeStatements,
+      ]);
+    }
+    if (newVersion == version && oldVersion == 4) {
+      return _execute(db, version5UpgradeStatements);
     }
     throw StateError(
       'Unsupported overlay schema upgrade: $oldVersion -> $newVersion',

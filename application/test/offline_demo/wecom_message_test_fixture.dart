@@ -18,6 +18,9 @@ class TestWeComMessage {
     required this.content,
     this.contentType = 2,
     this.flag = 0,
+    this.clientId,
+    this.inRetryQueue = false,
+    this.readState,
   });
 
   final int messageId;
@@ -29,6 +32,9 @@ class TestWeComMessage {
   final int contentType;
   final int flag;
   final List<int> content;
+  final String? clientId;
+  final bool inRetryQueue;
+  final List<int>? readState;
 }
 
 Future<void> createMessageDatabases(
@@ -53,6 +59,25 @@ CREATE TABLE message_table (
   content
 )
 ''');
+  await messageDatabase.execute('''
+CREATE TABLE message_client_id (
+  message_id INTEGER PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  send_failed_unnotified INTEGER NOT NULL
+)
+''');
+  await messageDatabase.execute('''
+CREATE TABLE retry_send_item_kv_table (
+  key INTEGER PRIMARY KEY NOT NULL,
+  value INTEGER NOT NULL
+)
+''');
+  await messageDatabase.execute('''
+CREATE TABLE message_read_state_table (
+  message_id INTEGER PRIMARY KEY,
+  read_state_pb NOT NULL
+)
+''');
   for (final message in messages) {
     await messageDatabase.insert('message_table', {
       'message_id': message.messageId,
@@ -65,6 +90,25 @@ CREATE TABLE message_table (
       'flag': message.flag,
       'content': Uint8List.fromList(message.content),
     });
+    if (message.clientId != null) {
+      await messageDatabase.insert('message_client_id', {
+        'message_id': message.messageId,
+        'client_id': message.clientId,
+        'send_failed_unnotified': 0,
+      });
+    }
+    if (message.inRetryQueue) {
+      await messageDatabase.insert('retry_send_item_kv_table', {
+        'key': message.messageId,
+        'value': message.sendTime,
+      });
+    }
+    if (message.readState != null) {
+      await messageDatabase.insert('message_read_state_table', {
+        'message_id': message.messageId,
+        'read_state_pb': Uint8List.fromList(message.readState!),
+      });
+    }
   }
   await messageDatabase.close();
 
@@ -109,6 +153,24 @@ List<WeComDatabaseContract> messageDatabaseContracts() => [
             testColumn('send_time', 'INTEGER', notNull: true),
             testColumn('flag', 'INTEGER', notNull: true),
             testColumn('content', ''),
+          ],
+          'message_client_id': [
+            testColumn('message_id', 'INTEGER', primaryKeyPosition: 1),
+            testColumn('client_id', 'TEXT', notNull: true),
+            testColumn('send_failed_unnotified', 'INTEGER', notNull: true),
+          ],
+          'message_read_state_table': [
+            testColumn('message_id', 'INTEGER', primaryKeyPosition: 1),
+            testColumn('read_state_pb', '', notNull: true),
+          ],
+          'retry_send_item_kv_table': [
+            testColumn(
+              'key',
+              'INTEGER',
+              notNull: true,
+              primaryKeyPosition: 1,
+            ),
+            testColumn('value', 'INTEGER', notNull: true),
           ],
         },
         indexes: const {},

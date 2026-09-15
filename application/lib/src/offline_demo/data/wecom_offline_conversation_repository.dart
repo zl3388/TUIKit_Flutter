@@ -5,11 +5,13 @@ import '../domain/repositories.dart';
 import '../domain/wecom_conversation_models.dart';
 import '../domain/wecom_message_models.dart';
 import 'wecom_conversation_repository.dart';
+import 'wecom_local_simulation_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
 import 'wecom_media_repository.dart';
 import 'wecom_message_content_decoder.dart';
 import 'wecom_message_repository.dart';
 import 'wecom_overlay_command_service.dart';
+import 'wecom_read_state_codec.dart';
 
 class WeComOfflineConversationRepository implements ConversationRepository {
   const WeComOfflineConversationRepository({
@@ -20,11 +22,13 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     required ContactRepository contacts,
     required WeComOverlayCommandService commands,
     WeComMediaRepository? media,
+    WeComLocalSimulationRepository? simulation,
   })  : _conversations = conversations,
         _messages = messages,
         _contacts = contacts,
         _commands = commands,
-        _media = media;
+        _media = media,
+        _simulation = simulation;
 
   static const _databaseName = 'session.db';
   static const _conversationTable = 'conversation_table';
@@ -36,6 +40,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   final ContactRepository _contacts;
   final WeComOverlayCommandService _commands;
   final WeComMediaRepository? _media;
+  final WeComLocalSimulationRepository? _simulation;
 
   @override
   bool get isAvailable => true;
@@ -47,6 +52,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         if (_media != null) ConversationFeature.attachments,
         ConversationFeature.pin,
         ConversationFeature.mute,
+        if (_simulation != null) ConversationFeature.sendText,
       };
 
   @override
@@ -60,28 +66,44 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     final contactsById = <String, DirectoryContact>{
       for (final contact in contacts) contact.id: contact,
     };
+    final now = _simulation?.now;
+    final simulatedExchanges =
+        await _simulation?.listExchanges() ?? const <WeComSimulatedExchange>[];
     final mapped = summaries.map((summary) {
       final lastMessage = lastMessages[summary.lastMessageId];
+      final simulatedPreview = now == null
+          ? null
+          : _latestSimulatedPreview(
+              simulatedExchanges.where(
+                (exchange) => exchange.conversationId == summary.id,
+              ),
+              now,
+            );
+      final baseLastMessageAt = _unixSeconds(summary.lastMessageTime);
+      final useSimulatedPreview = simulatedPreview != null &&
+          (baseLastMessageAt == null ||
+              simulatedPreview.sentAt.isAfter(baseLastMessageAt));
       return OfflineConversation(
         id: summary.id,
         type: _conversationType(summary.id),
         title: _conversationTitle(summary, contactsById),
         avatarPath: null,
-        lastMessagePreview: _messageContent(
-          lastMessage?.conversationId == summary.id ? lastMessage : null,
-        ).text,
-        lastMessageAt: _unixSeconds(summary.lastMessageTime),
+        lastMessagePreview: useSimulatedPreview
+            ? simulatedPreview.text
+            : _messageContent(
+                lastMessage?.conversationId == summary.id ? lastMessage : null,
+              ).text,
+        lastMessageAt:
+            useSimulatedPreview ? simulatedPreview.sentAt : baseLastMessageAt,
         draftText: drafts[summary.id] ?? '',
         unreadCount: summary.unreadState?.unreadCount ?? 0,
         isPinned: summary.pinnedFlag == 1,
         isMuted: summary.blockedFlag == 1,
       );
-    }).toList(growable: false);
+    }).toList(growable: true)
+      ..sort(_compareConversations);
 
-    return List<OfflineConversation>.unmodifiable([
-      ...mapped.where((conversation) => conversation.isPinned),
-      ...mapped.where((conversation) => !conversation.isPinned),
-    ]);
+    return List<OfflineConversation>.unmodifiable(mapped);
   }
 
   @override
@@ -151,11 +173,12 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     final contactsById = <String, DirectoryContact>{
       for (final contact in contacts) contact.id: contact,
     };
-    return messages
+    final mapped = messages
         .where((message) => message.conversationId == conversationId)
         .map((message) {
       final senderId = message.senderId.toString();
       final content = _messageContent(message);
+      final progress = _messageProgress(message);
       return OfflineMessage(
         id: message.messageId.toString(),
         conversationId: message.conversationId,
@@ -169,8 +192,30 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         ),
         status: '',
         isRecalled: false,
+        progress: progress.progress,
+        progressSource: progress.progress == OfflineMessageProgress.none
+            ? OfflineMessageProgressSource.none
+            : OfflineMessageProgressSource.weComObservation,
+        peerReaderCount: progress.peerReaderCount,
       );
-    }).toList(growable: false);
+    }).toList(growable: true);
+    final simulation = _simulation;
+    if (simulation != null) {
+      final now = simulation.now;
+      for (final exchange
+          in await simulation.listExchanges(conversationId: conversationId)) {
+        mapped.add(_simulatedOutgoingMessage(exchange, contactsById, now));
+        if (exchange.peerProfileId != null &&
+            !now.isBefore(exchange.automaticReplyAt)) {
+          mapped.add(_simulatedAutomaticReply(exchange, contactsById));
+        }
+      }
+    }
+    mapped.sort((left, right) {
+      final time = left.sentAt.compareTo(right.sentAt);
+      return time != 0 ? time : left.id.compareTo(right.id);
+    });
+    return List<OfflineMessage>.unmodifiable(mapped);
   }
 
   @override
@@ -217,8 +262,32 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     required String senderProfileId,
     required String text,
     DateTime? sentAt,
-  }) {
-    return _notMapped('Text message sending');
+  }) async {
+    final simulation = _simulation;
+    if (simulation == null) {
+      return _notMapped('Text message sending');
+    }
+    await _findSummary(conversationId);
+    final senderId = int.tryParse(senderProfileId);
+    if (senderId != currentUserId) {
+      throw ArgumentError.value(
+        senderProfileId,
+        'senderProfileId',
+        'Must identify the active WeCom user.',
+      );
+    }
+    final exchange = await simulation.enqueueTextExchange(
+      conversationId: conversationId,
+      senderProfileId: senderProfileId,
+      peerProfileId: _singlePeerId(conversationId),
+      text: text,
+    );
+    final contacts = await _contacts.listContacts();
+    return _simulatedOutgoingMessage(
+      exchange,
+      {for (final contact in contacts) contact.id: contact},
+      simulation.now,
+    );
   }
 
   @override
@@ -324,6 +393,93 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     return value == null || value.isEmpty ? null : value;
   }
 
+  int _compareConversations(
+    OfflineConversation left,
+    OfflineConversation right,
+  ) {
+    if (left.isPinned != right.isPinned) {
+      return left.isPinned ? -1 : 1;
+    }
+    final leftTime = left.lastMessageAt;
+    final rightTime = right.lastMessageAt;
+    if (leftTime == null || rightTime == null) {
+      if (leftTime == rightTime) {
+        return left.id.compareTo(right.id);
+      }
+      return leftTime == null ? 1 : -1;
+    }
+    final time = rightTime.compareTo(leftTime);
+    return time != 0 ? time : left.id.compareTo(right.id);
+  }
+
+  ({String text, DateTime sentAt})? _latestSimulatedPreview(
+    Iterable<WeComSimulatedExchange> exchanges,
+    DateTime now,
+  ) {
+    ({String text, DateTime sentAt})? latest;
+    for (final exchange in exchanges) {
+      final candidate = exchange.peerProfileId != null &&
+              !now.isBefore(exchange.automaticReplyAt)
+          ? (
+              text: exchange.automaticReplyText,
+              sentAt: exchange.automaticReplyAt,
+            )
+          : (text: exchange.text, sentAt: exchange.createdAt);
+      if (latest == null || candidate.sentAt.isAfter(latest.sentAt)) {
+        latest = candidate;
+      }
+    }
+    return latest;
+  }
+
+  OfflineMessage _simulatedOutgoingMessage(
+    WeComSimulatedExchange exchange,
+    Map<String, DirectoryContact> contactsById,
+    DateTime now,
+  ) {
+    final hasPeer = exchange.peerProfileId != null;
+    final progress = now.isBefore(exchange.serverAcknowledgedAt)
+        ? OfflineMessageProgress.waitingForServer
+        : hasPeer && !now.isBefore(exchange.peerReadAt)
+            ? OfflineMessageProgress.peerRead
+            : OfflineMessageProgress.serverAcknowledged;
+    return OfflineMessage(
+      id: 'local:${exchange.eventKey}',
+      conversationId: exchange.conversationId,
+      senderProfileId: exchange.senderProfileId,
+      senderName: contactsById[exchange.senderProfileId]?.displayName ??
+          exchange.senderProfileId,
+      kind: 'text',
+      text: exchange.text,
+      sentAt: exchange.createdAt,
+      status: '',
+      isRecalled: false,
+      progress: progress,
+      progressSource: OfflineMessageProgressSource.localSimulation,
+      peerReaderCount: progress == OfflineMessageProgress.peerRead ? 1 : 0,
+      nextProgressAt: exchange.nextTransitionAfter(now),
+    );
+  }
+
+  OfflineMessage _simulatedAutomaticReply(
+    WeComSimulatedExchange exchange,
+    Map<String, DirectoryContact> contactsById,
+  ) {
+    final peerProfileId = exchange.peerProfileId!;
+    return OfflineMessage(
+      id: 'local-reply:${exchange.eventKey}',
+      conversationId: exchange.conversationId,
+      senderProfileId: peerProfileId,
+      senderName: contactsById[peerProfileId]?.displayName ?? peerProfileId,
+      kind: 'text',
+      text: exchange.automaticReplyText,
+      sentAt: exchange.automaticReplyAt,
+      status: '',
+      isRecalled: false,
+      progressSource: OfflineMessageProgressSource.localSimulation,
+    );
+  }
+
   WeComDecodedMessageContent _messageContent(WeComMessageRecord? message) {
     if (message == null) {
       return const WeComDecodedMessageContent(kind: 'unsupported', text: '');
@@ -336,6 +492,49 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         text: '[无法解析的消息]',
       );
     }
+  }
+
+  ({OfflineMessageProgress progress, int peerReaderCount}) _messageProgress(
+    WeComMessageRecord message,
+  ) {
+    if (message.senderId != currentUserId) {
+      return (
+        progress: OfflineMessageProgress.none,
+        peerReaderCount: 0,
+      );
+    }
+    final readStateContent = message.readStateContent;
+    if (readStateContent != null) {
+      try {
+        final readState = decodeWeComReadState(readStateContent);
+        if (readState.readerIds.isNotEmpty) {
+          return (
+            progress: OfflineMessageProgress.peerRead,
+            peerReaderCount: readState.readerIds.length,
+          );
+        }
+        if (readState.field2Ids.isNotEmpty) {
+          return (
+            progress: OfflineMessageProgress.serverAcknowledged,
+            peerReaderCount: 0,
+          );
+        }
+      } on FormatException {
+        // An unknown read-state payload must not become a guessed status.
+      }
+    }
+    if (message.serverId == 0 &&
+        message.hasClientTracking &&
+        message.isInRetryQueue) {
+      return (
+        progress: OfflineMessageProgress.waitingForServer,
+        peerReaderCount: 0,
+      );
+    }
+    return (
+      progress: OfflineMessageProgress.none,
+      peerReaderCount: 0,
+    );
   }
 
   Future<T> _notMapped<T>(String feature) {

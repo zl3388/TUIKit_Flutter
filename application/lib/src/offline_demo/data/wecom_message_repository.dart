@@ -54,15 +54,22 @@ LIMIT ?
       final rows = await _messageDatabase.rawQuery(
         '''
 SELECT
-  message_id,
-  sequence,
-  sender_id,
-  conversation_id,
-  content_type,
-  send_time,
-  content
-FROM message_table
-WHERE message_id IN ($placeholders)
+  m.message_id,
+  m.server_id,
+  m.sequence,
+  m.sender_id,
+  m.conversation_id,
+  m.content_type,
+  m.send_time,
+  m.content,
+  CASE WHEN c.message_id IS NULL THEN 0 ELSE 1 END AS has_client_tracking,
+  CASE WHEN r.key IS NULL THEN 0 ELSE 1 END AS is_in_retry_queue,
+  s.read_state_pb
+FROM message_table AS m
+LEFT JOIN message_client_id AS c ON c.message_id = m.message_id
+LEFT JOIN retry_send_item_kv_table AS r ON r.key = m.message_id
+LEFT JOIN message_read_state_table AS s ON s.message_id = m.message_id
+WHERE m.message_id IN ($placeholders)
 ''',
         page,
       );

@@ -8,6 +8,7 @@ import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'wecom_identity_test_fixture.dart';
@@ -109,6 +110,12 @@ void main() {
       ),
       isFalse,
     );
+    expect(
+      environment.store.supportsConversationFeature(
+        ConversationFeature.sendText,
+      ),
+      isTrue,
+    );
     final members = await environment.store.membersFor('R:example');
     expect(members, hasLength(1));
     expect(members.single.displayName, 'Overlay contact');
@@ -117,6 +124,30 @@ void main() {
     await environment.store.setConversationMuted('R:example', true);
     expect(environment.store.conversations.single.isPinned, isTrue);
     expect(environment.store.conversations.single.isMuted, isTrue);
+    final simulated = await environment.store.sendTextMessage(
+      conversationId: 'R:example',
+      text: 'local only',
+    );
+    expect(simulated.text, 'local only');
+    expect(simulated.progressSource.name, 'localSimulation');
+    expect(
+      (await environment.store.messagesFor('R:example'))
+          .where((message) => message.text == 'local only'),
+      hasLength(1),
+    );
+    final sourceMessageDatabase = await databaseFactoryFfi.openDatabase(
+      imported.databaseFile('message.db').path,
+      options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+    );
+    expect(
+      Sqflite.firstIntValue(
+        await sourceMessageDatabase.rawQuery(
+          'SELECT COUNT(*) FROM message_table',
+        ),
+      ),
+      1,
+    );
+    await sourceMessageDatabase.close();
 
     await environment.close();
     await environment.close();

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package_exporter.dart';
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
@@ -232,6 +233,45 @@ void main() {
     expect(exported.appliedRevisionCount, 0);
     expect(exported.lastAppliedRevisionId, isNull);
     expect(exported.datasetId, basePackage.datasetId);
+  });
+
+  test('does not include local simulation metadata in compatible exports',
+      () async {
+    final simulation = WeComLocalSimulationRepository(
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
+      now: () => DateTime.utc(2026, 9, 15, 8),
+    );
+    await simulation.enqueueTextExchange(
+      conversationId: 'conv-a',
+      senderProfileId: '1',
+      peerProfileId: '2',
+      text: 'local only',
+    );
+
+    final exported = await exporter.export(
+      basePackage: basePackage,
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
+      destinationDirectory: destinationDirectory,
+    );
+
+    expect(exported.appliedRevisionCount, 0);
+    expect(exported.lastAppliedRevisionId, isNull);
+    expect(exported.datasetId, basePackage.datasetId);
+    expect(
+      (await destinationDirectory.list().toList())
+          .map((entity) => p.basename(entity.path))
+          .toList()
+        ..sort(),
+      ['session.db', 'user.db'],
+    );
   });
 
   test('constraint failures leave the base and destination unchanged',

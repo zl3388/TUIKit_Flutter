@@ -10,6 +10,7 @@ import '../data/system_attachment_opener.dart';
 import '../data/wecom_active_dataset_runtime.dart';
 import '../data/wecom_contact_repository.dart';
 import '../data/wecom_database_package.dart';
+import '../data/wecom_local_simulation_repository.dart';
 import '../data/wecom_offline_conversation_repository.dart';
 import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
@@ -111,6 +112,10 @@ abstract final class OfflineBootstrap {
             identityScope: runtime.identity.identity.scope,
           ),
           media: runtime.media,
+          simulation: WeComLocalSimulationRepository(
+            overlayDatabase: overlayDatabase,
+            identityScope: runtime.identity.identity.scope,
+          ),
         );
       } on WeComActiveDatasetException catch (error) {
         if (error.code != WeComActiveDatasetIssueCode.noActiveDataset &&

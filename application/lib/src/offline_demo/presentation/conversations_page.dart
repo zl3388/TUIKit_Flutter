@@ -543,6 +543,7 @@ class _ConversationPageState extends State<ConversationPage> {
   var _isSending = false;
   var _canSend = false;
   Timer? _draftTimer;
+  Timer? _messageProgressTimer;
 
   bool get _canSendText => widget.store.supportsConversationFeature(
         ConversationFeature.sendText,
@@ -570,6 +571,7 @@ class _ConversationPageState extends State<ConversationPage> {
   @override
   void dispose() {
     _draftTimer?.cancel();
+    _messageProgressTimer?.cancel();
     unawaited(_persistDraft());
     _composerController
       ..removeListener(_handleComposerChanged)
@@ -636,6 +638,7 @@ class _ConversationPageState extends State<ConversationPage> {
         _loadError = null;
         _isLoading = false;
       });
+      _scheduleMessageProgressRefresh(messages);
       if (scrollToEnd) {
         _scheduleScrollToEnd();
       }
@@ -647,6 +650,35 @@ class _ConversationPageState extends State<ConversationPage> {
         _loadError = error;
         _isLoading = false;
       });
+    }
+  }
+
+  void _scheduleMessageProgressRefresh(List<OfflineMessage> messages) {
+    _messageProgressTimer?.cancel();
+    final now = DateTime.now().toUtc();
+    final transitions = messages
+        .map((message) => message.nextProgressAt)
+        .whereType<DateTime>()
+        .where((instant) => instant.isAfter(now))
+        .toList(growable: false)
+      ..sort();
+    if (transitions.isEmpty) {
+      return;
+    }
+    final delay =
+        transitions.first.difference(now) + const Duration(milliseconds: 20);
+    _messageProgressTimer = Timer(delay, () {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_refreshAfterMessageProgress());
+    });
+  }
+
+  Future<void> _refreshAfterMessageProgress() async {
+    await _loadMessages(scrollToEnd: false);
+    if (mounted) {
+      await widget.store.refreshConversations();
     }
   }
 
@@ -894,13 +926,9 @@ class _MessageBubble extends StatelessWidget {
                             color: const Color(0xFF849096),
                           ),
                     ),
-                    if (isMine && message.status == 'sent') ...[
+                    if (isMine && _progressIcon != null) ...[
                       const SizedBox(width: 4),
-                      const Icon(
-                        Icons.done_rounded,
-                        size: 14,
-                        color: Color(0xFF849096),
-                      ),
+                      _progressIcon!,
                     ],
                   ],
                 ),
@@ -908,6 +936,41 @@ class _MessageBubble extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget? get _progressIcon {
+    final descriptor = switch (message.progress) {
+      OfflineMessageProgress.waitingForServer => (
+          icon: Icons.schedule_rounded,
+          label: '等待服务器确认',
+        ),
+      OfflineMessageProgress.serverAcknowledged => (
+          icon: Icons.done_rounded,
+          label: '服务器已确认',
+        ),
+      OfflineMessageProgress.peerRead => (
+          icon: Icons.done_all_rounded,
+          label: message.peerReaderCount > 1
+              ? '${message.peerReaderCount} 人已读'
+              : '对方已读',
+        ),
+      OfflineMessageProgress.none when message.status == 'sent' => (
+          icon: Icons.done_rounded,
+          label: '已发送',
+        ),
+      OfflineMessageProgress.none => null,
+    };
+    if (descriptor == null) {
+      return null;
+    }
+    return Tooltip(
+      message: descriptor.label,
+      child: Icon(
+        descriptor.icon,
+        size: 14,
+        color: const Color(0xFF849096),
       ),
     );
   }
