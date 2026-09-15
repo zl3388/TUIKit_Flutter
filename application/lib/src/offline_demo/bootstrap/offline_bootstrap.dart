@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../data/local_media_store.dart';
+import '../data/system_attachment_opener.dart';
 import '../data/wecom_active_dataset_runtime.dart';
 import '../data/wecom_contact_repository.dart';
 import '../data/wecom_database_package.dart';
@@ -108,6 +109,7 @@ abstract final class OfflineBootstrap {
             overlayDatabase: overlayDatabase,
             contract: contract,
           ),
+          media: runtime.media,
         );
       } on WeComActiveDatasetException catch (error) {
         if (error.code != WeComActiveDatasetIssueCode.noActiveDataset &&
@@ -123,6 +125,7 @@ abstract final class OfflineBootstrap {
         identityRepository: identityRepository,
         contactRepository: contactRepository,
         conversationRepository: conversationRepository,
+        attachmentOpener: const SystemAttachmentOpener(),
       );
       final store = OfflineDemoStore(repositories);
       await store.load();

@@ -198,6 +198,8 @@ class OfflineAttachment {
     this.durationMs,
     this.width,
     this.height,
+    this.localPath,
+    this.unavailableReason,
   });
 
   final String id;
@@ -211,6 +213,10 @@ class OfflineAttachment {
   final int? durationMs;
   final int? width;
   final int? height;
+  final String? localPath;
+  final String? unavailableReason;
+
+  bool get isAvailable => localPath != null && unavailableReason == null;
 
   factory OfflineAttachment.fromRow(Map<String, Object?> row) =>
       OfflineAttachment(

@@ -537,6 +537,7 @@ class _ConversationPageState extends State<ConversationPage> {
   late final TextEditingController _composerController;
   final _scrollController = ScrollController();
   List<OfflineMessage> _messages = const [];
+  Map<String, List<OfflineAttachment>> _attachmentsByMessageId = const {};
   Object? _loadError;
   var _isLoading = true;
   var _isSending = false;
@@ -607,11 +608,31 @@ class _ConversationPageState extends State<ConversationPage> {
   Future<void> _loadMessages({bool scrollToEnd = false}) async {
     try {
       final messages = await widget.store.messagesFor(widget.conversation.id);
+      final attachmentsByMessageId = <String, List<OfflineAttachment>>{};
+      if (widget.store.supportsConversationFeature(
+        ConversationFeature.attachments,
+      )) {
+        final mediaMessages = messages.where(
+          (message) => const {'image', 'video', 'voice', 'file'}.contains(
+            message.kind,
+          ),
+        );
+        final attachments = await Future.wait(
+          mediaMessages.map(
+            (message) => widget.store.attachmentsFor(message.id),
+          ),
+        );
+        var index = 0;
+        for (final message in mediaMessages) {
+          attachmentsByMessageId[message.id] = attachments[index++];
+        }
+      }
       if (!mounted) {
         return;
       }
       setState(() {
         _messages = messages;
+        _attachmentsByMessageId = Map.unmodifiable(attachmentsByMessageId);
         _loadError = null;
         _isLoading = false;
       });
@@ -656,6 +677,21 @@ class _ConversationPageState extends State<ConversationPage> {
     } finally {
       if (mounted) {
         setState(() => _isSending = false);
+      }
+    }
+  }
+
+  Future<void> _openAttachment(OfflineAttachment attachment) async {
+    if (!attachment.isAvailable) {
+      return;
+    }
+    try {
+      await widget.store.openAttachment(attachment);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('无法打开文件：$error')),
+        );
       }
     }
   }
@@ -720,6 +756,8 @@ class _ConversationPageState extends State<ConversationPage> {
           return _MessageBubble(
             message: message,
             isMine: message.senderProfileId == widget.currentProfileId,
+            attachments: _attachmentsByMessageId[message.id] ?? const [],
+            onOpenAttachment: _openAttachment,
           );
         },
       ),
@@ -783,10 +821,17 @@ class _ConversationPageState extends State<ConversationPage> {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, required this.isMine});
+  const _MessageBubble({
+    required this.message,
+    required this.isMine,
+    required this.attachments,
+    required this.onOpenAttachment,
+  });
 
   final OfflineMessage message;
   final bool isMine;
+  final List<OfflineAttachment> attachments;
+  final ValueChanged<OfflineAttachment> onOpenAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -833,7 +878,11 @@ class _MessageBubble extends StatelessWidget {
                           : const Color(0xFFE2E8E7),
                     ),
                   ),
-                  child: _MessageContent(message: message),
+                  child: _MessageContent(
+                    message: message,
+                    attachments: attachments,
+                    onOpenAttachment: onOpenAttachment,
+                  ),
                 ),
                 const SizedBox(height: 3),
                 Row(
@@ -865,19 +914,102 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _MessageContent extends StatelessWidget {
-  const _MessageContent({required this.message});
+  const _MessageContent({
+    required this.message,
+    required this.attachments,
+    required this.onOpenAttachment,
+  });
 
   final OfflineMessage message;
+  final List<OfflineAttachment> attachments;
+  final ValueChanged<OfflineAttachment> onOpenAttachment;
 
   @override
   Widget build(BuildContext context) {
+    final mediaVisual = switch (message.kind) {
+      'image' => const (
+          icon: Icons.image_outlined,
+          foreground: Color(0xFF247863),
+          background: Color(0xFFE2F3ED),
+        ),
+      'video' => const (
+          icon: Icons.videocam_outlined,
+          foreground: Color(0xFFB34D42),
+          background: Color(0xFFF9E7E4),
+        ),
+      'voice' => const (
+          icon: Icons.graphic_eq_rounded,
+          foreground: Color(0xFF356A98),
+          background: Color(0xFFE5EEF7),
+        ),
+      'file' => const (
+          icon: Icons.insert_drive_file_outlined,
+          foreground: Color(0xFF8A6325),
+          background: Color(0xFFF6ECD9),
+        ),
+      _ => null,
+    };
+    if (mediaVisual != null) {
+      if (attachments.isNotEmpty) {
+        return ConstrainedBox(
+          key: Key('media-message-${message.id}'),
+          constraints: const BoxConstraints(minWidth: 180, maxWidth: 280),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var index = 0; index < attachments.length; index++) ...[
+                if (index > 0)
+                  const Divider(height: 13, color: Color(0xFFDCE5E2)),
+                _MediaAttachmentRow(
+                  attachment: attachments[index],
+                  icon: mediaVisual.icon,
+                  foreground: mediaVisual.foreground,
+                  background: mediaVisual.background,
+                  onOpen: onOpenAttachment,
+                ),
+              ],
+            ],
+          ),
+        );
+      }
+      return Semantics(
+        container: true,
+        label: switch (message.kind) {
+          'image' => '图片消息',
+          'video' => '视频消息',
+          'voice' => '语音消息',
+          _ => '文件消息',
+        },
+        child: ConstrainedBox(
+          key: Key('media-message-${message.id}'),
+          constraints: const BoxConstraints(minWidth: 180, maxWidth: 280),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: mediaVisual.background,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  mediaVisual.icon,
+                  size: 22,
+                  color: mediaVisual.foreground,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Flexible(child: Text(message.text)),
+            ],
+          ),
+        ),
+      );
+    }
     final icon = switch (message.kind) {
-      'image' => Icons.image_outlined,
       'location' => Icons.location_on_outlined,
       'emoji' => Icons.emoji_emotions_outlined,
-      'file' => Icons.insert_drive_file_outlined,
-      'voice' => Icons.mic_none_rounded,
-      'video' => Icons.videocam_outlined,
       'call' => Icons.call_outlined,
       'mixed' => Icons.dashboard_customize_outlined,
       'unsupported' => Icons.help_outline_rounded,
@@ -895,6 +1027,95 @@ class _MessageContent extends StatelessWidget {
       ],
     );
   }
+}
+
+class _MediaAttachmentRow extends StatelessWidget {
+  const _MediaAttachmentRow({
+    required this.attachment,
+    required this.icon,
+    required this.foreground,
+    required this.background,
+    required this.onOpen,
+  });
+
+  final OfflineAttachment attachment;
+  final IconData icon;
+  final Color foreground;
+  final Color background;
+  final ValueChanged<OfflineAttachment> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final content = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 22, color: foreground),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(attachment.fileName),
+              const SizedBox(height: 2),
+              Text(
+                attachment.isAvailable
+                    ? _formatAttachmentSize(attachment.sizeBytes)
+                    : '离线文件不可用',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: const Color(0xFF6B797F),
+                    ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Icon(
+          attachment.isAvailable
+              ? Icons.open_in_new_rounded
+              : Icons.error_outline_rounded,
+          size: 18,
+          color: attachment.isAvailable
+              ? const Color(0xFF506168)
+              : const Color(0xFF9B6A36),
+        ),
+      ],
+    );
+    return Semantics(
+      button: attachment.isAvailable,
+      enabled: attachment.isAvailable,
+      label: attachment.isAvailable
+          ? '${attachment.fileName}，打开文件'
+          : '${attachment.fileName}，离线文件不可用',
+      child: InkWell(
+        key: Key('media-attachment-${attachment.id}'),
+        onTap: attachment.isAvailable ? () => onOpen(attachment) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: content,
+        ),
+      ),
+    );
+  }
+}
+
+String _formatAttachmentSize(int bytes) {
+  if (bytes < 1024) {
+    return '$bytes B';
+  }
+  if (bytes < 1024 * 1024) {
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  }
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
 class _SystemMessage extends StatelessWidget {

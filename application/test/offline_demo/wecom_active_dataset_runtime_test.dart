@@ -7,6 +7,7 @@ import 'package:application/src/offline_demo/data/wecom_incremental_merge_planne
 import 'package:application/src/offline_demo/data/wecom_incremental_migration_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -288,6 +289,44 @@ void main() {
       ),
     );
   });
+
+  test('reopens an imported media companion with the active dataset', () async {
+    final imported = await _importPackage(
+      temporaryDirectory,
+      importer,
+      name: 'with-media',
+      contactName: 'Current user',
+      conversationName: 'Room',
+      includeMedia: true,
+    );
+    await resolver.ensureInitialDataset(imported.datasetId);
+    final wxWorkRoot = Directory(p.join(temporaryDirectory.path, 'WXWork'));
+    final account = await _createMediaAccount(wxWorkRoot);
+    addTearDown(account.connection.close);
+
+    final snapshot = await resolver.importMediaSnapshot(
+      datasetId: imported.datasetId,
+      wxWorkRoot: wxWorkRoot,
+    );
+    expect(snapshot.referencedFileCount, 1);
+    expect(snapshot.copiedFileCount, 1);
+
+    final runtime = await resolver.openActive();
+    expect(runtime.media, isNotNull);
+    final message = (await runtime.messages.findMessagesById([1]))[1]!;
+    final attachments = await runtime.media!.listMessageAttachments(message);
+    expect(attachments, hasLength(1));
+    expect(attachments.single.location.isAvailable, isTrue);
+    expect(
+      attachments.single.location.file!.path,
+      startsWith(snapshot.mediaRoot.path),
+    );
+    await runtime.close();
+
+    final reopened = await resolver.openActive();
+    expect(reopened.media, isNotNull);
+    await reopened.close();
+  });
 }
 
 Future<int> _activationCount(WeComOverlayDatabase overlayDatabase) async {
@@ -305,6 +344,7 @@ Future<WeComImportedPackage> _importPackage(
   required String contactName,
   required String conversationName,
   bool multipleCorporations = false,
+  bool includeMedia = false,
 }) async {
   final source = await Directory(p.join(root.path, name)).create();
   await createIdentityDatabases(source, contactName: contactName);
@@ -317,16 +357,18 @@ Future<WeComImportedPackage> _importPackage(
     );
   }
   await _createSessionDatabase(source, conversationName);
+  await _createFileDatabase(source, includeMedia: includeMedia);
   await createMessageDatabases(
     source,
     conversationNumericId: 1,
-    messages: const [
+    messages: [
       TestWeComMessage(
         messageId: 1,
         serverId: 1,
         sequence: 1,
         senderId: 1,
         conversationId: 'R:1',
+        contentType: includeMedia ? 15 : 0,
         sendTime: 100,
         content: [
           0x0a,
@@ -411,6 +453,39 @@ WeComPackageContract _contract() {
     databases: [
       ...identityDatabaseContracts(),
       WeComDatabaseContract(
+        fileName: 'file.db',
+        allowEmpty: false,
+        tables: {
+          'file_table4': [
+            testColumn(
+              'origin',
+              'INTEGER',
+              notNull: true,
+              primaryKeyPosition: 1,
+            ),
+            testColumn(
+              'message_id',
+              'INTEGER',
+              notNull: true,
+              primaryKeyPosition: 2,
+            ),
+            testColumn(
+              'file_index',
+              'INTEGER',
+              notNull: true,
+              primaryKeyPosition: 3,
+            ),
+            testColumn('message_type', 'INTEGER', notNull: true),
+            testColumn('server_id', 'TEXT', notNull: true),
+            testColumn('name', 'TEXT', notNull: true),
+            testColumn('size', 'INTEGER', notNull: true),
+            testColumn('receive_time', 'INTEGER', notNull: true),
+            testColumn('md5', 'TEXT', notNull: true),
+          ],
+        },
+        indexes: const {},
+      ),
+      WeComDatabaseContract(
         fileName: 'session.db',
         allowEmpty: false,
         tables: {
@@ -461,4 +536,95 @@ WeComPackageContract _contract() {
       ...messageDatabaseContracts(),
     ],
   );
+}
+
+Future<void> _createFileDatabase(
+  Directory source, {
+  required bool includeMedia,
+}) async {
+  final database = await databaseFactoryFfi.openDatabase(
+    p.join(source.path, 'file.db'),
+    options: OpenDatabaseOptions(singleInstance: false),
+  );
+  await database.execute('''
+CREATE TABLE file_table4 (
+  origin INTEGER NOT NULL DEFAULT 0,
+  message_id INTEGER NOT NULL DEFAULT 0,
+  file_index INTEGER NOT NULL DEFAULT 0,
+  message_type INTEGER NOT NULL DEFAULT 0,
+  server_id TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  receive_time INTEGER NOT NULL DEFAULT 0,
+  md5 TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (origin, message_id, file_index)
+)
+''');
+  if (includeMedia) {
+    final bytes = [1, 2, 3, 4];
+    await database.insert('file_table4', {
+      'origin': 0,
+      'message_id': 1,
+      'file_index': 0,
+      'message_type': 0,
+      'server_id': '',
+      'name': 'report.pdf',
+      'size': bytes.length,
+      'receive_time': 100,
+      'md5': md5.convert(bytes).toString(),
+    });
+  }
+  await database.close();
+}
+
+Future<_MediaAccountFixture> _createMediaAccount(Directory wxWorkRoot) async {
+  final account = Directory(p.join(wxWorkRoot.path, 'selected_account'));
+  final cacheFile = File(
+    p.join(account.path, 'Cache', 'File', '1970-01', 'report.pdf'),
+  );
+  await cacheFile.create(recursive: true);
+  final bytes = [1, 2, 3, 4];
+  await cacheFile.writeAsBytes(bytes);
+  await Directory(p.join(account.path, 'Data')).create();
+  final mappingDirectory =
+      await Directory(p.join(account.path, 'CacheMapping')).create();
+  final mappingFile = File(
+    p.join(mappingDirectory.path, '11111111111111111111111111111111.db'),
+  );
+  final connection = await databaseFactoryFfi.openDatabase(
+    mappingFile.path,
+    options: OpenDatabaseOptions(singleInstance: false),
+  );
+  await connection.rawQuery('PRAGMA journal_mode=WAL');
+  await connection.rawQuery('PRAGMA wal_autocheckpoint=0');
+  await connection.execute('''
+CREATE TABLE mapping (
+  type integer default 0 not null,
+  key text default '' not null,
+  file_name text default '',
+  last_modify_time integer default 0 not null,
+  file_md5 integer default 0 not null,
+  primary key (type,key)
+)
+''');
+  await connection.execute(
+    'CREATE INDEX file_md5_index_ on mapping (file_md5)',
+  );
+  await connection.execute(
+    'CREATE INDEX file_name_index_ on mapping (file_name)',
+  );
+  await connection.insert('mapping', {
+    'type': 1,
+    'key': 'file-key',
+    'file_name': '${account.path}\\Cache\\File\\1970-01\\report.pdf',
+    'last_modify_time': 1,
+    'file_md5': md5.convert(bytes).toString(),
+  });
+  return _MediaAccountFixture(connection);
+}
+
+class _MediaAccountFixture {
+  const _MediaAccountFixture(this.connection);
+
+  final Database connection;
 }

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_conversation_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_media_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_message_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_offline_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
@@ -265,6 +266,98 @@ void main() {
       repository.deleteConversation('S:1_2'),
       throwsA(isA<UnsupportedError>()),
     );
+  });
+
+  test('exposes verified media locations only when a locator is attached',
+      () async {
+    final mediaRoot = Directory(p.join(temporaryDirectory.path, 'Cache'));
+    final mediaFile = File(
+      p.join(mediaRoot.path, 'File', '2025-06', 'report.pdf'),
+    );
+    await mediaFile.create(recursive: true);
+    await mediaFile.writeAsBytes([1, 2, 3]);
+    final fileDatabase = await databaseFactoryFfi.openDatabase(
+      p.join(temporaryDirectory.path, 'file.db'),
+      options: OpenDatabaseOptions(singleInstance: false),
+    );
+    final cacheMappingDatabase = await databaseFactoryFfi.openDatabase(
+      p.join(temporaryDirectory.path, 'cache-mapping.db'),
+      options: OpenDatabaseOptions(singleInstance: false),
+    );
+    addTearDown(fileDatabase.close);
+    addTearDown(cacheMappingDatabase.close);
+    await fileDatabase.execute('''
+CREATE TABLE file_table4 (
+  origin INTEGER NOT NULL DEFAULT 0,
+  message_id INTEGER NOT NULL DEFAULT 0,
+  file_index INTEGER NOT NULL DEFAULT 0,
+  message_type INTEGER NOT NULL DEFAULT 0,
+  server_id TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  receive_time INTEGER NOT NULL DEFAULT 0,
+  md5 TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (origin, message_id, file_index)
+)
+''');
+    await cacheMappingDatabase.execute('''
+CREATE TABLE mapping (
+  type INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  file_name TEXT,
+  PRIMARY KEY (type, key)
+)
+''');
+    await fileDatabase.insert('file_table4', {
+      'origin': 0,
+      'message_id': 1,
+      'file_index': 0,
+      'message_type': 0,
+      'name': 'report.pdf',
+      'size': 3,
+      'receive_time': 1748707200,
+    });
+    repository = WeComOfflineConversationRepository(
+      datasetId: datasetId,
+      currentUserId: 1,
+      conversations: WeComMergedConversationRepository(
+        datasetId: datasetId,
+        baseRepository: WeComConversationRepository(baseDatabase),
+        overlayDatabase: overlayDatabase,
+      ),
+      messages: WeComMessageRepository(
+        messageDatabase: messageDatabase,
+        lookupDatabase: lookupDatabase,
+      ),
+      contacts: const _FixtureContacts(),
+      commands: WeComOverlayCommandService(
+        overlayDatabase: overlayDatabase,
+        contract: WeComPackageContract.fromJsonString(
+          await File(
+            p.join(
+              Directory.current.path,
+              'assets',
+              'offline_demo',
+              'wecom_schema_contract.json',
+            ),
+          ).readAsString(),
+        ),
+      ),
+      media: WeComMediaRepository(
+        fileDatabase: fileDatabase,
+        cacheMappingDatabase: cacheMappingDatabase,
+        mediaRoot: mediaRoot,
+      ),
+    );
+
+    expect(repository.features, contains(ConversationFeature.attachments));
+    final attachments = await repository.listAttachments('1');
+    expect(attachments, hasLength(1));
+    expect(attachments.single.fileName, 'report.pdf');
+    expect(attachments.single.localPath, mediaFile.path);
+    expect(attachments.single.isAvailable, isTrue);
+    expect(attachments.single.unavailableReason, isNull);
+    expect(await repository.listAttachments('999'), isEmpty);
   });
 }
 

@@ -85,6 +85,14 @@ class OfflineDemoStore extends ChangeNotifier {
     return repositories.conversations.listMembers(conversationId);
   }
 
+  Future<List<OfflineAttachment>> attachmentsFor(String messageId) {
+    return repositories.conversations.listAttachments(messageId);
+  }
+
+  Future<void> openAttachment(OfflineAttachment attachment) {
+    return repositories.attachmentOpener.open(attachment);
+  }
+
   Future<OfflineMessage> sendTextMessage({
     required String conversationId,
     required String text,

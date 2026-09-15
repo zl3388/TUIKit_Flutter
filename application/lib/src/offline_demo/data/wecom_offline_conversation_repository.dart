@@ -1,9 +1,12 @@
+import 'package:path/path.dart' as p;
+
 import '../domain/models.dart';
 import '../domain/repositories.dart';
 import '../domain/wecom_conversation_models.dart';
 import '../domain/wecom_message_models.dart';
 import 'wecom_conversation_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
+import 'wecom_media_repository.dart';
 import 'wecom_message_content_decoder.dart';
 import 'wecom_message_repository.dart';
 import 'wecom_overlay_command_service.dart';
@@ -16,10 +19,12 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     required WeComMessageRepository messages,
     required ContactRepository contacts,
     required WeComOverlayCommandService commands,
+    WeComMediaRepository? media,
   })  : _conversations = conversations,
         _messages = messages,
         _contacts = contacts,
-        _commands = commands;
+        _commands = commands,
+        _media = media;
 
   static const _databaseName = 'session.db';
   static const _conversationTable = 'conversation_table';
@@ -30,14 +35,16 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   final WeComMessageRepository _messages;
   final ContactRepository _contacts;
   final WeComOverlayCommandService _commands;
+  final WeComMediaRepository? _media;
 
   @override
   bool get isAvailable => true;
 
   @override
-  Set<ConversationFeature> get features => const {
+  Set<ConversationFeature> get features => {
         ConversationFeature.members,
         ConversationFeature.messages,
+        if (_media != null) ConversationFeature.attachments,
         ConversationFeature.pin,
         ConversationFeature.mute,
       };
@@ -167,8 +174,41 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<List<OfflineAttachment>> listAttachments(String messageId) {
-    return _notMapped('Message attachments');
+  Future<List<OfflineAttachment>> listAttachments(String messageId) async {
+    final media = _media;
+    if (media == null) {
+      return _notMapped('Message attachments');
+    }
+    final numericId = int.tryParse(messageId);
+    if (numericId == null) {
+      throw ArgumentError.value(messageId, 'messageId', 'Must be an integer');
+    }
+    final message = (await _messages.findMessagesById([numericId]))[numericId];
+    if (message == null) {
+      return const [];
+    }
+    final attachments = await media.listMessageAttachments(message);
+    return attachments.map((attachment) {
+      final relativePath = attachment.location.relativePath ?? '';
+      final fileName = attachment.name.isNotEmpty
+          ? attachment.name
+          : (relativePath.isEmpty
+              ? 'attachment-${attachment.fileIndex + 1}'
+              : p.basename(relativePath));
+      return OfflineAttachment(
+        id: '${attachment.origin}:${attachment.messageId}:'
+            '${attachment.fileIndex}',
+        messageId: attachment.messageId.toString(),
+        kind: attachment.kind ?? 'file',
+        relativePath: relativePath,
+        fileName: fileName,
+        sizeBytes: attachment.sizeBytes,
+        localPath: attachment.location.file?.path,
+        unavailableReason: attachment.location.isAvailable
+            ? null
+            : attachment.location.status.name,
+      );
+    }).toList(growable: false);
   }
 
   @override

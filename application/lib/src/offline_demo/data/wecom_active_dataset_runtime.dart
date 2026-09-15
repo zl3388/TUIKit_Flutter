@@ -8,6 +8,8 @@ import 'wecom_directory_repository.dart';
 import 'wecom_identity_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
 import 'wecom_merged_directory_repository.dart';
+import 'wecom_media_repository.dart';
+import 'wecom_media_snapshot.dart';
 import 'wecom_message_repository.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
@@ -42,6 +44,7 @@ class WeComActiveDatasetRuntime {
     required this.conversations,
     required this.messages,
     required this.identity,
+    required this.media,
     required List<Database> connections,
   }) : _connections = connections;
 
@@ -50,6 +53,7 @@ class WeComActiveDatasetRuntime {
   final WeComMergedConversationRepository conversations;
   final WeComMessageRepository messages;
   final WeComCurrentIdentityRepository identity;
+  final WeComMediaRepository? media;
   final List<Database> _connections;
 
   bool _closed = false;
@@ -68,7 +72,7 @@ class WeComActiveDatasetRuntime {
 }
 
 class WeComActiveDatasetResolver {
-  const WeComActiveDatasetResolver({
+  WeComActiveDatasetResolver({
     required Directory destinationRoot,
     required WeComDatabasePackageImporter packageImporter,
     required DatabaseFactory databaseFactory,
@@ -76,12 +80,33 @@ class WeComActiveDatasetResolver {
   })  : _destinationRoot = destinationRoot,
         _packageImporter = packageImporter,
         _databaseFactory = databaseFactory,
-        _overlayDatabase = overlayDatabase;
+        _overlayDatabase = overlayDatabase,
+        _mediaSnapshots = WeComMediaSnapshotManager(
+          destinationRoot: destinationRoot,
+          databaseFactory: databaseFactory,
+        );
 
   final Directory _destinationRoot;
   final WeComDatabasePackageImporter _packageImporter;
   final DatabaseFactory _databaseFactory;
   final WeComOverlayDatabase _overlayDatabase;
+  final WeComMediaSnapshotManager _mediaSnapshots;
+
+  Future<WeComMediaSnapshot> importMediaSnapshot({
+    required String datasetId,
+    required Directory wxWorkRoot,
+  }) async {
+    final package = await _packageImporter.openImportedPackage(
+      destinationRoot: _destinationRoot,
+      datasetId: datasetId,
+    );
+    return _mediaSnapshots.importReferencedMedia(
+      datasetId: datasetId,
+      fileDatabase: package.databaseFile('file.db'),
+      messageDatabase: package.databaseFile('message.db'),
+      wxWorkRoot: wxWorkRoot,
+    );
+  }
 
   Future<bool> ensureInitialDataset(
     String datasetId, {
@@ -218,6 +243,8 @@ class WeComActiveDatasetResolver {
     Database? sessionDatabase;
     Database? messageDatabase;
     Database? messageLookupDatabase;
+    Database? fileDatabase;
+    Database? cacheMappingDatabase;
     try {
       final corporationId = activation.corporationId;
       final userId = activation.userId;
@@ -254,6 +281,25 @@ class WeComActiveDatasetResolver {
         'message_lookup.db',
         factory: _databaseFactory,
       );
+      final mediaSnapshot = await _mediaSnapshots.openSnapshot(
+        package.datasetId,
+        verifyMediaHashes: false,
+      );
+      WeComMediaRepository? media;
+      if (mediaSnapshot != null) {
+        fileDatabase = await package.openReadOnly(
+          'file.db',
+          factory: _databaseFactory,
+        );
+        cacheMappingDatabase = await mediaSnapshot.openCacheMappingReadOnly(
+          _databaseFactory,
+        );
+        media = WeComMediaRepository(
+          fileDatabase: fileDatabase,
+          cacheMappingDatabase: cacheMappingDatabase,
+          mediaRoot: mediaSnapshot.mediaRoot,
+        );
+      }
       final current = await _readLatestActivation(
         _overlayDatabase.connection,
       );
@@ -285,14 +331,19 @@ class WeComActiveDatasetResolver {
           lookupDatabase: messageLookupDatabase,
         ),
         identity: WeComCurrentIdentityRepository(userDatabase, identity),
+        media: media,
         connections: [
           userDatabase,
           sessionDatabase,
           messageDatabase,
           messageLookupDatabase,
+          if (fileDatabase != null) fileDatabase,
+          if (cacheMappingDatabase != null) cacheMappingDatabase,
         ],
       );
     } catch (_) {
+      await _closeQuietly(cacheMappingDatabase);
+      await _closeQuietly(fileDatabase);
       await _closeQuietly(messageLookupDatabase);
       await _closeQuietly(messageDatabase);
       await _closeQuietly(sessionDatabase);

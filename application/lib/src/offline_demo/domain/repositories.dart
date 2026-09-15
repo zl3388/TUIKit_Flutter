@@ -72,17 +72,24 @@ abstract interface class ActivityRepository {
   Future<void> markNotificationRead(String notificationId);
 }
 
+abstract interface class AttachmentOpener {
+  Future<void> open(OfflineAttachment attachment);
+}
+
 class OfflineRepositoryBundle {
   OfflineRepositoryBundle({
     IdentityRepository? identityRepository,
     ContactRepository? contactRepository,
     ConversationRepository? conversationRepository,
     ActivityRepository? activityRepository,
+    AttachmentOpener? attachmentOpener,
   })  : identity = identityRepository ?? const UnavailableIdentityRepository(),
         contacts = contactRepository ?? const UnavailableContactRepository(),
         conversations =
             conversationRepository ?? const UnavailableConversationRepository(),
-        activity = activityRepository ?? const UnavailableActivityRepository();
+        activity = activityRepository ?? const UnavailableActivityRepository(),
+        attachmentOpener =
+            attachmentOpener ?? const UnavailableAttachmentOpener();
 
   factory OfflineRepositoryBundle.fromLegacyDatabase(
     OfflineDatabase database, {
@@ -107,6 +114,18 @@ class OfflineRepositoryBundle {
   final ContactRepository contacts;
   final ConversationRepository conversations;
   final ActivityRepository activity;
+  final AttachmentOpener attachmentOpener;
+}
+
+class UnavailableAttachmentOpener implements AttachmentOpener {
+  const UnavailableAttachmentOpener();
+
+  @override
+  Future<void> open(OfflineAttachment attachment) {
+    return Future.error(
+      StateError('No local attachment opener is available.'),
+    );
+  }
 }
 
 class SqliteIdentityRepository implements IdentityRepository {
