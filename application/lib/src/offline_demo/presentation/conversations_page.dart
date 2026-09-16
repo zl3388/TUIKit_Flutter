@@ -135,8 +135,9 @@ class _ConversationsPageState extends State<ConversationsPage> {
           _WorkspaceSummary(
             profile: profile,
             unreadConversations: store.unreadConversationCount,
-            unreadNotifications:
-                store.activityAvailable ? store.unreadNotificationCount : null,
+            unreadNotifications: store.notificationsAvailable
+                ? store.unreadNotificationCount
+                : null,
           )
         else
           const _IdentityRequiredSummary(),
@@ -782,14 +783,21 @@ class _ConversationPageState extends State<ConversationPage> {
         itemCount: _messages.length,
         itemBuilder: (context, index) {
           final message = _messages[index];
-          if (message.kind == 'system') {
-            return _SystemMessage(message: message);
-          }
-          return _MessageBubble(
-            message: message,
-            isMine: message.senderProfileId == widget.currentProfileId,
-            attachments: _attachmentsByMessageId[message.id] ?? const [],
-            onOpenAttachment: _openAttachment,
+          final showDate = index == 0 ||
+              !_isSameLocalDate(_messages[index - 1].sentAt, message.sentAt);
+          return Column(
+            children: [
+              if (showDate) _MessageDateSeparator(message: message),
+              if (message.kind == 'system')
+                _SystemMessage(message: message)
+              else
+                _MessageBubble(
+                  message: message,
+                  isMine: message.senderProfileId == widget.currentProfileId,
+                  attachments: _attachmentsByMessageId[message.id] ?? const [],
+                  onOpenAttachment: _openAttachment,
+                ),
+            ],
           );
         },
       ),
@@ -846,6 +854,39 @@ class _ConversationPageState extends State<ConversationPage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+bool _isSameLocalDate(DateTime first, DateTime second) {
+  final firstLocal = first.toLocal();
+  final secondLocal = second.toLocal();
+  return firstLocal.year == secondLocal.year &&
+      firstLocal.month == secondLocal.month &&
+      firstLocal.day == secondLocal.day;
+}
+
+class _MessageDateSeparator extends StatelessWidget {
+  const _MessageDateSeparator({required this.message});
+
+  final OfflineMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final local = message.sentAt.toLocal();
+    final label =
+        '${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)}';
+    return Padding(
+      key: Key('message-date-separator-${message.id}'),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Center(
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: const Color(0xFF708087),
+              ),
         ),
       ),
     );
@@ -910,10 +951,39 @@ class _MessageBubble extends StatelessWidget {
                           : const Color(0xFFE2E8E7),
                     ),
                   ),
-                  child: _MessageContent(
-                    message: message,
-                    attachments: attachments,
-                    onOpenAttachment: onOpenAttachment,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (message.replyPreview != null) ...[
+                        Container(
+                          key: Key('reply-preview-${message.id}'),
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFF1F5F4),
+                            border: Border(
+                              left: BorderSide(
+                                color: OfflineTheme.primary,
+                                width: 3,
+                              ),
+                            ),
+                          ),
+                          child: Text(
+                            message.replyPreview!,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      _MessageContent(
+                        message: message,
+                        attachments: attachments,
+                        onOpenAttachment: onOpenAttachment,
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 3),
@@ -989,6 +1059,16 @@ class _MessageContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (message.isRecalled) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.undo_rounded, size: 18, color: Color(0xFF64727A)),
+          const SizedBox(width: 7),
+          Flexible(child: Text(message.text)),
+        ],
+      );
+    }
     final mediaVisual = switch (message.kind) {
       'image' => const (
           icon: Icons.image_outlined,
@@ -1074,6 +1154,7 @@ class _MessageContent extends StatelessWidget {
       'location' => Icons.location_on_outlined,
       'emoji' => Icons.emoji_emotions_outlined,
       'call' => Icons.call_outlined,
+      'meeting' => Icons.video_camera_front_outlined,
       'mixed' => Icons.dashboard_customize_outlined,
       'unsupported' => Icons.help_outline_rounded,
       _ => null,

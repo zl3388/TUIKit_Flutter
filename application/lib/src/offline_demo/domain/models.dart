@@ -171,6 +171,7 @@ class OfflineMessage {
     required this.status,
     required this.isRecalled,
     this.replyToMessageId,
+    this.replyPreview,
     this.progress = OfflineMessageProgress.none,
     this.progressSource = OfflineMessageProgressSource.none,
     this.peerReaderCount = 0,
@@ -187,6 +188,7 @@ class OfflineMessage {
   final String status;
   final bool isRecalled;
   final String? replyToMessageId;
+  final String? replyPreview;
   final OfflineMessageProgress progress;
   final OfflineMessageProgressSource progressSource;
   final int peerReaderCount;
@@ -203,6 +205,7 @@ class OfflineMessage {
         status: row['status']! as String,
         isRecalled: row['is_recalled'] == 1,
         replyToMessageId: row['reply_to_message_id'] as String?,
+        replyPreview: row['reply_preview'] as String?,
       );
 }
 

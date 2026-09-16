@@ -58,6 +58,94 @@ void main() {
           clientId: 'local-client-id',
           inRetryQueue: true,
         ),
+        TestWeComMessage(
+          messageId: 4,
+          serverId: 104,
+          sequence: 40,
+          senderId: 2,
+          conversationId: 'S:1_2',
+          sendTime: 40,
+          clientId: 'parent-client-id',
+          content: _textMessage('父消息'),
+        ),
+        TestWeComMessage(
+          messageId: 5,
+          serverId: 105,
+          sequence: 50,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 50,
+          flag: 512,
+          content: _textMessage('回复'),
+          extraContent: _message([
+            _bytesField(
+              1002,
+              _message([
+                _bytesField(1, _message([_varintField(2, 40)])),
+                _stringField(2, 'parent-client-id'),
+              ]),
+            ),
+          ]),
+        ),
+        TestWeComMessage(
+          messageId: 6,
+          serverId: 106,
+          sequence: 60,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 60,
+          flag: 32,
+          clientId: 'recalled-client-id',
+          content: _textMessage('撤回原文'),
+        ),
+        TestWeComMessage(
+          messageId: 7,
+          serverId: 107,
+          sequence: 70,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 70,
+          flag: 512,
+          content: _textMessage('父消息缺失'),
+          extraContent: _message([
+            _bytesField(
+              1002,
+              _message([
+                _bytesField(1, _message([_varintField(2, 999)])),
+                _stringField(2, 'missing-parent'),
+              ]),
+            ),
+          ]),
+        ),
+        TestWeComMessage(
+          messageId: 8,
+          serverId: 108,
+          sequence: 80,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 80,
+          flag: 512,
+          content: _textMessage('引用元数据缺失'),
+        ),
+        TestWeComMessage(
+          messageId: 9,
+          serverId: 109,
+          sequence: 90,
+          senderId: 1,
+          conversationId: 'S:1_2',
+          sendTime: 90,
+          contentType: 31,
+          flag: 512,
+          content: _textMessage('非引用类型'),
+        ),
+      ],
+      revokes: [
+        TestWeComRevoke(
+          conversationNumericId: 7,
+          appInfo: 'recalled-client-id',
+          sendTime: 60,
+          payload: _message([_stringField(8, '撤回片段')]),
+        ),
       ],
     );
     messageDatabase = await databaseFactoryFfi.openDatabase(
@@ -83,8 +171,12 @@ void main() {
   test('reads indexed messages in ascending sequence order', () async {
     final messages = await repository.listConversationMessages(7);
 
-    expect(messages.map((message) => message.messageId), [1, 2, 3]);
-    expect(messages.map((message) => message.sequence), [10, 20, 30]);
+    expect(
+      messages.map((message) => message.messageId),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    );
+    expect(messages.map((message) => message.sequence),
+        [10, 20, 30, 40, 50, 60, 70, 80, 90]);
     expect(
       decodeWeComTextMessage(messages.first.content!),
       '再',
@@ -94,9 +186,9 @@ void main() {
       '好的',
     );
     expect(messages[1].readStateContent, _bytes('08ba99d9c38e808003'));
-    expect(messages.last.serverId, 0);
-    expect(messages.last.hasClientTracking, isTrue);
-    expect(messages.last.isInRetryQueue, isTrue);
+    expect(messages[2].serverId, 0);
+    expect(messages[2].hasClientTracking, isTrue);
+    expect(messages[2].isInRetryQueue, isTrue);
   });
 
   test('ignores lookup rows whose message row no longer exists', () async {
@@ -110,7 +202,26 @@ void main() {
 
     final messages = await repository.listConversationMessages(7);
 
-    expect(messages.map((message) => message.messageId), [1, 2, 3]);
+    expect(
+      messages.map((message) => message.messageId),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    );
+  });
+
+  test('resolves quote parents and marks recalled rows read-only', () async {
+    final messages = await repository.findMessagesById([5, 6, 7, 8, 9]);
+
+    expect(messages[5]!.quotedMessage!.messageId, 4);
+    expect(messages[5]!.quotedMessage!.isRecalled, isFalse);
+    expect(messages[5]!.hasMissingQuotedMessage, isFalse);
+    expect(messages[6]!.isRecalled, isTrue);
+    expect(messages[6]!.recalledText, '撤回片段');
+    expect(messages[7]!.quotedMessage, isNull);
+    expect(messages[7]!.hasMissingQuotedMessage, isTrue);
+    expect(messages[8]!.quotedMessage, isNull);
+    expect(messages[8]!.hasMissingQuotedMessage, isTrue);
+    expect(messages[9]!.quotedMessage, isNull);
+    expect(messages[9]!.hasMissingQuotedMessage, isFalse);
   });
 
   test('decodes all confirmed text and emoji items only', () {
@@ -242,6 +353,22 @@ void main() {
           text: '[视频] 30 秒 · 1920×1080 · 1.0 MB',
         ),
       (
+        type: 31,
+        content: _message([
+          _bytesField(
+            1,
+            _message([
+              _stringField(1, '系统卡片'),
+              _stringField(4, '阅读全文'),
+              _stringField(5, 'https://private.invalid/system'),
+            ]),
+          ),
+          _varintField(2, 2),
+        ]),
+        kind: 'system',
+        text: '[系统消息] 系统卡片 · 阅读全文',
+      ),
+      (
         type: 40,
         content: _message([
           _stringField(3, '对方已取消'),
@@ -250,6 +377,34 @@ void main() {
         ]),
         kind: 'call',
         text: '[通话] 对方已取消 · 33 秒',
+      ),
+      (
+        type: 503,
+        content: _message([
+          _bytesField(
+            2,
+            _message([
+              _stringField(1, '来自测试用户的未接语音通话'),
+              _varintField(4, 2),
+            ]),
+          ),
+        ]),
+        kind: 'call',
+        text: '[未接通话] 来自测试用户的未接语音通话',
+      ),
+      (
+        type: 579,
+        content: _message([
+          _bytesField(
+            1,
+            _message([
+              _stringField(4, '快速会议'),
+              _varintField(5, 2),
+            ]),
+          ),
+        ]),
+        kind: 'meeting',
+        text: '[会议] 快速会议',
       ),
       (
         type: 123,
@@ -279,6 +434,15 @@ void main() {
           kind: 'text',
           text: '原始文本',
         ),
+      (
+        type: 1018,
+        content: _message([
+          _varintField(2, 3),
+          _stringField(3, '语音通话未接听'),
+        ]),
+        kind: 'call',
+        text: '[群通话] 语音通话未接听',
+      ),
     ];
 
     for (final item in cases) {

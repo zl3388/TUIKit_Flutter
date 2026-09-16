@@ -98,7 +98,7 @@ class WorkbenchPage extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Card(
-              child: !store.activityAvailable
+              child: !store.announcementsAvailable
                   ? const ListTile(
                       leading: Icon(Icons.campaign_outlined),
                       title: Text('公告数据尚未映射'),

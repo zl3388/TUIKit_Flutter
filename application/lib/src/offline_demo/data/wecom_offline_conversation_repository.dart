@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:path/path.dart' as p;
 
 import '../domain/models.dart';
@@ -177,7 +179,26 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         .where((message) => message.conversationId == conversationId)
         .map((message) {
       final senderId = message.senderId.toString();
-      final content = _messageContent(message);
+      final quotedMessage = message.quotedMessage;
+      var content = _messageContent(message);
+      if ((quotedMessage != null || message.hasMissingQuotedMessage) &&
+          message.contentType == 2 &&
+          message.content != null) {
+        final parts = decodeWeComTextMessageParts(message.content!);
+        if (parts.length > 1) {
+          content = WeComDecodedMessageContent(kind: 'text', text: parts.last);
+        }
+      }
+      final replyPreview = message.hasMissingQuotedMessage
+          ? '原消息不可用'
+          : quotedMessage == null
+              ? null
+              : quotedMessage.isRecalled
+                  ? '该消息已被撤回'
+                  : _decodedContent(
+                      quotedMessage.contentType,
+                      quotedMessage.content,
+                    ).text;
       final progress = _messageProgress(message);
       return OfflineMessage(
         id: message.messageId.toString(),
@@ -185,13 +206,17 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         senderProfileId: senderId,
         senderName: contactsById[senderId]?.displayName ?? senderId,
         kind: content.kind,
-        text: content.text,
+        text: message.isRecalled
+            ? message.recalledText ?? '该消息已被撤回'
+            : content.text,
         sentAt: DateTime.fromMillisecondsSinceEpoch(
           message.sendTime * 1000,
           isUtc: true,
         ),
         status: '',
-        isRecalled: false,
+        isRecalled: message.isRecalled,
+        replyToMessageId: quotedMessage?.messageId.toString(),
+        replyPreview: replyPreview,
         progress: progress.progress,
         progressSource: progress.progress == OfflineMessageProgress.none
             ? OfflineMessageProgressSource.none
@@ -485,13 +510,20 @@ class WeComOfflineConversationRepository implements ConversationRepository {
       return const WeComDecodedMessageContent(kind: 'unsupported', text: '');
     }
     try {
-      return decodeWeComMessageContent(message.contentType, message.content);
+      return _decodedContent(message.contentType, message.content);
     } on FormatException {
       return const WeComDecodedMessageContent(
         kind: 'unsupported',
         text: '[无法解析的消息]',
       );
     }
+  }
+
+  WeComDecodedMessageContent _decodedContent(
+    int contentType,
+    Uint8List? content,
+  ) {
+    return decodeWeComMessageContent(contentType, content);
   }
 
   ({OfflineMessageProgress progress, int peerReaderCount}) _messageProgress(

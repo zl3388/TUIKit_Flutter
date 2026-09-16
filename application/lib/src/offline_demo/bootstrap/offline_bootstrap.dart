@@ -7,6 +7,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../data/local_media_store.dart';
 import '../data/system_attachment_opener.dart';
+import '../data/wecom_activity_repository.dart';
 import '../data/wecom_active_dataset_runtime.dart';
 import '../data/wecom_contact_repository.dart';
 import '../data/wecom_database_package.dart';
@@ -93,6 +94,7 @@ abstract final class OfflineBootstrap {
       ContactRepository contactRepository;
       IdentityRepository identityRepository;
       ConversationRepository conversationRepository;
+      ActivityRepository activityRepository;
       try {
         runtime = await resolver.openActive();
         contactRepository = WeComContactRepository(
@@ -117,6 +119,11 @@ abstract final class OfflineBootstrap {
             identityScope: runtime.identity.identity.scope,
           ),
         );
+        activityRepository = WeComActivityRepository(
+          currentUserId: runtime.identity.identity.userId,
+          messages: runtime.messages,
+          contacts: contactRepository,
+        );
       } on WeComActiveDatasetException catch (error) {
         if (error.code != WeComActiveDatasetIssueCode.noActiveDataset &&
             error.code != WeComActiveDatasetIssueCode.identityRequired) {
@@ -125,12 +132,14 @@ abstract final class OfflineBootstrap {
         contactRepository = const UnavailableContactRepository();
         identityRepository = const UnavailableIdentityRepository();
         conversationRepository = const UnavailableConversationRepository();
+        activityRepository = const UnavailableActivityRepository();
       }
 
       final repositories = OfflineRepositoryBundle(
         identityRepository: identityRepository,
         contactRepository: contactRepository,
         conversationRepository: conversationRepository,
+        activityRepository: activityRepository,
         attachmentOpener: const SystemAttachmentOpener(),
       );
       final store = OfflineDemoStore(repositories);

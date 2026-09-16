@@ -61,7 +61,7 @@ abstract interface class ConversationRepository {
 }
 
 abstract interface class ActivityRepository {
-  bool get isAvailable;
+  Set<ActivityFeature> get features;
 
   Future<List<OfflineNotification>> listNotifications();
 
@@ -71,6 +71,8 @@ abstract interface class ActivityRepository {
 
   Future<void> markNotificationRead(String notificationId);
 }
+
+enum ActivityFeature { notifications, announcements, calls }
 
 abstract interface class AttachmentOpener {
   Future<void> open(OfflineAttachment attachment);
@@ -495,7 +497,11 @@ class SqliteActivityRepository implements ActivityRepository {
   final Database _db;
 
   @override
-  bool get isAvailable => true;
+  Set<ActivityFeature> get features => const {
+        ActivityFeature.notifications,
+        ActivityFeature.announcements,
+        ActivityFeature.calls,
+      };
 
   @override
   Future<List<OfflineNotification>> listNotifications() async {
@@ -546,7 +552,7 @@ class UnavailableActivityRepository implements ActivityRepository {
   const UnavailableActivityRepository();
 
   @override
-  bool get isAvailable => false;
+  Set<ActivityFeature> get features => const {};
 
   @override
   Future<List<OfflineNotification>> listNotifications() async => const [];

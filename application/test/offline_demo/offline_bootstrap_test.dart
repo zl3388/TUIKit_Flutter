@@ -48,7 +48,9 @@ void main() {
     expect(environment.store.contactsAvailable, isFalse);
     expect(environment.store.conversationsAvailable, isFalse);
     expect(environment.store.identityAvailable, isFalse);
-    expect(environment.store.activityAvailable, isFalse);
+    expect(environment.store.notificationsAvailable, isFalse);
+    expect(environment.store.announcementsAvailable, isFalse);
+    expect(environment.store.callsAvailable, isFalse);
     expect(environment.store.profile, isNull);
     expect(environment.store.contacts, isEmpty);
     expect(environment.store.conversations, isEmpty);
@@ -77,7 +79,9 @@ void main() {
 
     expect(environment.store.contactsAvailable, isTrue);
     expect(environment.store.conversationsAvailable, isTrue);
-    expect(environment.store.activityAvailable, isFalse);
+    expect(environment.store.notificationsAvailable, isFalse);
+    expect(environment.store.announcementsAvailable, isFalse);
+    expect(environment.store.callsAvailable, isTrue);
     expect(environment.wecomRuntime?.datasetId, imported.datasetId);
     expect(environment.store.contacts, hasLength(1));
     expect(environment.store.contacts.single.id, '1');

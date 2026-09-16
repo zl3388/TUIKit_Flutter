@@ -20,7 +20,15 @@ class OfflineDemoStore extends ChangeNotifier {
   bool get identityAvailable => repositories.identity.isAvailable;
   bool get contactsAvailable => repositories.contacts.isAvailable;
   bool get conversationsAvailable => repositories.conversations.isAvailable;
-  bool get activityAvailable => repositories.activity.isAvailable;
+  bool get notificationsAvailable => repositories.activity.features.contains(
+        ActivityFeature.notifications,
+      );
+  bool get announcementsAvailable => repositories.activity.features.contains(
+        ActivityFeature.announcements,
+      );
+  bool get callsAvailable => repositories.activity.features.contains(
+        ActivityFeature.calls,
+      );
 
   bool supportsConversationFeature(ConversationFeature feature) {
     return repositories.conversations.features.contains(feature);
@@ -46,9 +54,15 @@ class OfflineDemoStore extends ChangeNotifier {
         repositories.contacts.listOrganizationUnits(),
         repositories.contacts.listContacts(),
         repositories.conversations.listConversations(),
-        repositories.activity.listNotifications(),
-        repositories.activity.listAnnouncements(),
-        repositories.activity.listCallRecords(),
+        notificationsAvailable
+            ? repositories.activity.listNotifications()
+            : Future.value(const <OfflineNotification>[]),
+        announcementsAvailable
+            ? repositories.activity.listAnnouncements()
+            : Future.value(const <OfflineAnnouncement>[]),
+        callsAvailable
+            ? repositories.activity.listCallRecords()
+            : Future.value(const <OfflineCallRecord>[]),
       ]);
       profile = results[0] as OfflineProfile?;
       organizationUnits = results[1] as List<OrgUnit>;

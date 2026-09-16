@@ -17,7 +17,7 @@ class NotificationsPage extends StatelessWidget {
       animation: store,
       builder: (context, _) => Scaffold(
         appBar: AppBar(title: const Text('通知中心')),
-        body: !store.activityAvailable
+        body: !store.notificationsAvailable
             ? const _ActivityState(
                 icon: Icons.notifications_none_rounded,
                 label: '通知数据尚未映射',
@@ -84,7 +84,7 @@ class AnnouncementsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('企业公告')),
-      body: !store.activityAvailable
+      body: !store.announcementsAvailable
           ? const _ActivityState(
               icon: Icons.campaign_outlined,
               label: '公告数据尚未映射',
@@ -183,7 +183,7 @@ class CallRecordsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('通话记录')),
-      body: !store.activityAvailable
+      body: !store.callsAvailable
           ? const _ActivityState(
               icon: Icons.call_outlined,
               label: '通话数据尚未映射',
@@ -200,11 +200,20 @@ class CallRecordsPage extends StatelessWidget {
                   itemBuilder: (context, index) {
                     final record = store.callRecords[index];
                     final missed = record.status == 'missed';
-                    final direction =
-                        record.direction == 'incoming' ? '呼入' : '呼出';
-                    final duration = record.durationSeconds == 0
-                        ? '未接通'
-                        : formatDuration(record.durationSeconds);
+                    final direction = switch (record.direction) {
+                      'incoming' => '呼入',
+                      'outgoing' => '呼出',
+                      _ => '群聊',
+                    };
+                    final duration = switch (record.status) {
+                      'missed' => '未接',
+                      'rejected' => '已拒绝',
+                      'cancelled_self' => '已取消',
+                      'cancelled_peer' => '对方已取消',
+                      _ when record.durationSeconds > 0 =>
+                        formatDuration(record.durationSeconds),
+                      _ => '未接通',
+                    };
                     return Material(
                       color: Colors.white,
                       child: ListTile(
@@ -268,7 +277,7 @@ class DataOverviewPage extends StatelessWidget {
           OfflineInfoTile(
             icon: Icons.notifications_none_rounded,
             label: '通知',
-            value: store.activityAvailable
+            value: store.notificationsAvailable
                 ? '${store.notifications.length}'
                 : '未映射',
           ),

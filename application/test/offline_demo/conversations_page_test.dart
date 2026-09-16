@@ -187,6 +187,72 @@ void main() {
     expect(find.byTooltip('2 人已读'), findsOneWidget);
     expect(find.byIcon(Icons.done_all_rounded), findsOneWidget);
   });
+
+  testWidgets('separates messages only at local calendar-day boundaries',
+      (tester) async {
+    final store = OfflineDemoStore(
+      OfflineRepositoryBundle(
+        conversationRepository: const _ReadOnlyMessageRepository(
+          splitAcrossDays: true,
+        ),
+      ),
+    );
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ConversationPage(
+          conversation: _conversation,
+          currentProfileId: '1',
+          store: store,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('message-date-separator-1')), findsOneWidget);
+    expect(find.byKey(const Key('message-date-separator-2')), findsNothing);
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('message-date-separator-4')),
+      160,
+    );
+    expect(find.byKey(const Key('message-date-separator-3')), findsNothing);
+    expect(find.byKey(const Key('message-date-separator-4')), findsOneWidget);
+    expect(find.byKey(const Key('message-date-separator-5')), findsNothing);
+    expect(find.text('2026-09-14'), findsOneWidget);
+    expect(find.text('2026-09-15'), findsOneWidget);
+  });
+
+  testWidgets('renders quote context and recalled state without actions',
+      (tester) async {
+    final store = OfflineDemoStore(
+      OfflineRepositoryBundle(
+        conversationRepository: const _ReadOnlyMessageRepository(
+          exposeAdvancedMessages: true,
+        ),
+      ),
+    );
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ConversationPage(
+          conversation: _conversation,
+          currentProfileId: '1',
+          store: store,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('reply-preview-6')),
+      160,
+    );
+
+    expect(find.text('父消息预览'), findsOneWidget);
+    expect(find.byKey(const Key('reply-preview-6')), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('撤回片段'), 160);
+    expect(find.byIcon(Icons.undo_rounded), findsOneWidget);
+    expect(find.byType(TextButton), findsNothing);
+  });
 }
 
 const _conversation = OfflineConversation(
@@ -206,11 +272,15 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
     this.longFileName = false,
     this.exposeAttachments = false,
     this.exposeProgress = false,
+    this.splitAcrossDays = false,
+    this.exposeAdvancedMessages = false,
   });
 
   final bool longFileName;
   final bool exposeAttachments;
   final bool exposeProgress;
+  final bool splitAcrossDays;
+  final bool exposeAdvancedMessages;
 
   @override
   bool get isAvailable => true;
@@ -257,7 +327,7 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
           senderName: 'Peer',
           kind: 'text',
           text: '已读取消息',
-          sentAt: DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true),
+          sentAt: _sentAt(1000, 14, 10),
           status: '',
           isRecalled: false,
         ),
@@ -270,7 +340,7 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
           text: longFileName
               ? '[文件] 这是一个需要完整换行显示的文件名_Quarterly_Report_2026_Final.pdf · 2.0 KB'
               : '[文件] report.pdf · 2.0 KB',
-          sentAt: DateTime.fromMillisecondsSinceEpoch(2000, isUtc: true),
+          sentAt: _sentAt(2000, 14, 11),
           status: '',
           isRecalled: false,
         ),
@@ -281,7 +351,7 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
           senderName: 'Peer',
           kind: 'image',
           text: '[图片] 640×480 · 2.0 KB',
-          sentAt: DateTime.fromMillisecondsSinceEpoch(3000, isUtc: true),
+          sentAt: _sentAt(3000, 14, 12),
           status: '',
           isRecalled: false,
         ),
@@ -292,7 +362,7 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
           senderName: 'Me',
           kind: 'video',
           text: '[视频] 30 秒 · 1920×1080 · 1.0 MB',
-          sentAt: DateTime.fromMillisecondsSinceEpoch(4000, isUtc: true),
+          sentAt: _sentAt(4000, 15, 9),
           status: '',
           isRecalled: false,
           progress: exposeProgress
@@ -310,11 +380,41 @@ class _ReadOnlyMessageRepository extends UnavailableConversationRepository {
           senderName: 'Peer',
           kind: 'voice',
           text: '[语音] 12 秒',
-          sentAt: DateTime.fromMillisecondsSinceEpoch(5000, isUtc: true),
+          sentAt: _sentAt(5000, 15, 10),
           status: '',
           isRecalled: false,
         ),
+        if (exposeAdvancedMessages)
+          OfflineMessage(
+            id: '6',
+            conversationId: conversationId,
+            senderProfileId: '2',
+            senderName: 'Peer',
+            kind: 'text',
+            text: '引用回复',
+            sentAt: _sentAt(6000, 15, 11),
+            status: '',
+            isRecalled: false,
+            replyToMessageId: '1',
+            replyPreview: '父消息预览',
+          ),
+        if (exposeAdvancedMessages)
+          OfflineMessage(
+            id: '7',
+            conversationId: conversationId,
+            senderProfileId: '2',
+            senderName: 'Peer',
+            kind: 'text',
+            text: '撤回片段',
+            sentAt: _sentAt(7000, 15, 12),
+            status: '',
+            isRecalled: true,
+          ),
       ];
+
+  DateTime _sentAt(int fallbackMillis, int day, int hour) => splitAcrossDays
+      ? DateTime(2026, 9, day, hour)
+      : DateTime.fromMillisecondsSinceEpoch(fallbackMillis, isUtc: true);
 }
 
 class _RecordingAttachmentOpener implements AttachmentOpener {
