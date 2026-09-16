@@ -9,6 +9,7 @@ import 'package:application/src/offline_demo/domain/models.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
 import 'package:application/src/offline_demo/presentation/offline_home.dart';
 import 'package:application/src/offline_demo/presentation/offline_theme.dart';
+import 'package:application/src/offline_demo/state/admin_access_controller.dart';
 import 'package:application/src/offline_demo/state/offline_demo_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -77,7 +78,90 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+
+    testWidgets(
+      'enters and exits local admin mode at width $width',
+      (tester) async {
+        tester.view.physicalSize = Size(width, 900);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final fixture = (await tester.runAsync(_HomeFixture.create))!;
+        addTearDown(fixture.close);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: OfflineTheme.light,
+            home: OfflineHome(environment: fixture.environment),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('我的').last);
+        await tester.pumpAndSettle();
+        final versionEntry = find.byKey(const Key('offline-version-entry'));
+        for (var tap = 0; tap < 6; tap += 1) {
+          await tester.tap(versionEntry);
+        }
+        await tester.pump();
+        expect(find.text('设置管理口令'), findsNothing);
+
+        await tester.tap(versionEntry);
+        await tester.pumpAndSettle();
+        expect(find.text('设置管理口令'), findsOneWidget);
+        await tester.enterText(
+          find.byKey(const Key('admin-pin-field')),
+          '2468',
+        );
+        await tester.enterText(
+          find.byKey(const Key('admin-pin-confirm-field')),
+          '2468',
+        );
+        await tester.tap(find.byKey(const Key('admin-pin-submit')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('管理模式'), findsWidgets);
+        expect(find.text('管理'), findsWidgets);
+        await tester.tap(find.text('管理').last);
+        await tester.pumpAndSettle();
+        expect(find.text('未选择数据源'), findsOneWidget);
+        expect(find.text('退出管理模式'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('exit-admin-mode')));
+        await tester.pumpAndSettle();
+        expect(find.text('管理'), findsNothing);
+        expect(find.text('退出管理模式'), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
+
+  testWidgets('keeps the admin entry available without an active identity', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final fixture = (await tester.runAsync(
+      () => _HomeFixture.create(identityAvailable: false),
+    ))!;
+    addTearDown(fixture.close);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: OfflineTheme.light,
+        home: OfflineHome(environment: fixture.environment),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('我的').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('未选择企业身份'), findsOneWidget);
+    expect(find.byKey(const Key('offline-version-entry')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _HomeFixture {
@@ -91,7 +175,7 @@ class _HomeFixture {
   final _RecordingAttachmentOpener opener;
   final Directory root;
 
-  static Future<_HomeFixture> create() async {
+  static Future<_HomeFixture> create({bool identityAvailable = true}) async {
     final root = await Directory.systemTemp.createTemp('tui_offline_home_');
     final mediaRoot = Directory(p.join(root.path, 'media'));
     final wecomRoot = await Directory(p.join(root.path, 'wecom')).create();
@@ -104,7 +188,9 @@ class _HomeFixture {
     );
     final opener = _RecordingAttachmentOpener();
     final repositories = OfflineRepositoryBundle(
-      identityRepository: const _IdentityRepository(),
+      identityRepository: identityAvailable
+          ? const _IdentityRepository()
+          : const UnavailableIdentityRepository(),
       contactRepository: const _ContactRepository(),
       conversationRepository: _ConversationRepository(verifiedFile.path),
       activityRepository: const _ActivityRepository(),
@@ -112,6 +198,10 @@ class _HomeFixture {
     );
     final store = OfflineDemoStore(repositories);
     await store.load();
+    final adminAccess = AdminAccessController(
+      credentialStore: _MemoryAdminCredentialStore(),
+    );
+    await adminAccess.initialize();
     final importer = WeComDatabasePackageImporter(
       contract: WeComPackageContract(
         formatVersion: 1,
@@ -124,6 +214,7 @@ class _HomeFixture {
       mediaStore: await LocalMediaStore.forRoot(mediaRoot),
       repositories: repositories,
       store: store,
+      adminAccess: adminAccess,
       wecomOverlayDatabase: overlay,
       wecomDatasetResolver: WeComActiveDatasetResolver(
         destinationRoot: wecomRoot,
@@ -306,5 +397,17 @@ class _RecordingAttachmentOpener implements AttachmentOpener {
   @override
   Future<void> open(OfflineAttachment attachment) async {
     opened.add(attachment);
+  }
+}
+
+class _MemoryAdminCredentialStore implements AdminCredentialStore {
+  AdminPinCredential? credential;
+
+  @override
+  Future<AdminPinCredential?> load() async => credential;
+
+  @override
+  Future<void> save(AdminPinCredential credential) async {
+    this.credential = credential;
   }
 }

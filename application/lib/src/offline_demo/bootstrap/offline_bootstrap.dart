@@ -16,6 +16,7 @@ import '../data/wecom_offline_conversation_repository.dart';
 import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
 import '../domain/repositories.dart';
+import '../state/admin_access_controller.dart';
 import '../state/offline_demo_store.dart';
 
 class OfflineEnvironment {
@@ -23,6 +24,7 @@ class OfflineEnvironment {
     required this.mediaStore,
     required this.repositories,
     required this.store,
+    required this.adminAccess,
     required this.wecomOverlayDatabase,
     required this.wecomDatasetResolver,
     this.wecomRuntime,
@@ -31,6 +33,7 @@ class OfflineEnvironment {
   final LocalMediaStore mediaStore;
   final OfflineRepositoryBundle repositories;
   final OfflineDemoStore store;
+  final AdminAccessController adminAccess;
   final WeComOverlayDatabase wecomOverlayDatabase;
   final WeComActiveDatasetResolver wecomDatasetResolver;
   final WeComActiveDatasetRuntime? wecomRuntime;
@@ -45,7 +48,11 @@ class OfflineEnvironment {
     try {
       await wecomRuntime?.close();
     } finally {
-      await wecomOverlayDatabase.close();
+      try {
+        await wecomOverlayDatabase.close();
+      } finally {
+        adminAccess.dispose();
+      }
     }
   }
 }
@@ -60,16 +67,27 @@ abstract final class OfflineBootstrap {
     Directory? mediaRootDirectory,
     Directory? wecomRootDirectory,
     WeComPackageContract? wecomContract,
+    AdminCredentialStore? adminCredentialStore,
+    String adminBuildPin = const String.fromEnvironment('ADMIN_PIN'),
   }) async {
     final resolvedFactory = factory ?? databaseFactory;
     WeComOverlayDatabase? overlayDatabase;
     WeComActiveDatasetRuntime? runtime;
+    AdminAccessController? adminAccess;
     try {
       final mediaStore = mediaRootDirectory == null
           ? await LocalMediaStore.initialize()
           : await LocalMediaStore.forRoot(mediaRootDirectory);
       final wecomRoot = wecomRootDirectory ?? await _defaultWeComRoot();
       await wecomRoot.create(recursive: true);
+      adminAccess = AdminAccessController(
+        credentialStore: adminCredentialStore ??
+            FileAdminCredentialStore(
+              File(p.join(wecomRoot.path, 'admin_access.json')),
+            ),
+        buildPin: adminBuildPin,
+      );
+      await adminAccess.initialize();
       final contract = wecomContract ??
           WeComPackageContract.fromJsonString(
             await rootBundle.loadString(_contractAsset),
@@ -148,6 +166,7 @@ abstract final class OfflineBootstrap {
         mediaStore: mediaStore,
         repositories: repositories,
         store: store,
+        adminAccess: adminAccess,
         wecomOverlayDatabase: overlayDatabase,
         wecomDatasetResolver: resolver,
         wecomRuntime: runtime,
@@ -156,7 +175,11 @@ abstract final class OfflineBootstrap {
       try {
         await runtime?.close();
       } finally {
-        await overlayDatabase?.close();
+        try {
+          await overlayDatabase?.close();
+        } finally {
+          adminAccess?.dispose();
+        }
       }
       rethrow;
     }

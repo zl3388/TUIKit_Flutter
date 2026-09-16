@@ -54,6 +54,7 @@ class OfflineInfoTile extends StatelessWidget {
     required this.label,
     required this.value,
     this.allowWrap = false,
+    this.onTap,
     super.key,
   });
 
@@ -61,6 +62,7 @@ class OfflineInfoTile extends StatelessWidget {
   final String label;
   final String value;
   final bool allowWrap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -74,6 +76,7 @@ class OfflineInfoTile extends StatelessWidget {
     return Material(
       color: Colors.white,
       child: ListTile(
+        onTap: onTap,
         leading: Icon(icon),
         title: Text(label),
         trailing: allowWrap
