@@ -212,6 +212,18 @@ void main() {
     expect(imported.files['main.db']!.sha256, _decryptedJournalSha256);
   });
 
+  test('imports an encrypted package with one default account key', () async {
+    await _createEncryptedSourcePackage(sourceDirectory);
+
+    final imported = await _importer(_encryptedContract()).importPackage(
+      sourceDirectory: sourceDirectory,
+      destinationRoot: destinationDirectory,
+      defaultRawKeyHex: _publicTestKey,
+    );
+
+    expect(imported.files['main.db']!.sha256, _decryptedJournalSha256);
+  });
+
   test('wrong decryption key preserves the source and destination', () async {
     await _createEncryptedSourcePackage(sourceDirectory);
     final sourceBefore = await _snapshotSource(sourceDirectory);

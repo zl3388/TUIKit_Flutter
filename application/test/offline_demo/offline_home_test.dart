@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:application/src/offline_demo/bootstrap/offline_bootstrap.dart';
 import 'package:application/src/offline_demo/data/local_media_store.dart';
 import 'package:application/src/offline_demo/data/wecom_active_dataset_runtime.dart';
+import 'package:application/src/offline_demo/data/wecom_data_source_service.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
+import 'package:application/src/offline_demo/data/wecom_source_directory_access.dart';
 import 'package:application/src/offline_demo/domain/models.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
 import 'package:application/src/offline_demo/presentation/offline_home.dart';
@@ -33,7 +35,10 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(
             theme: OfflineTheme.light,
-            home: OfflineHome(environment: fixture.environment),
+            home: OfflineHome(
+              environment: fixture.environment,
+              onEnvironmentReload: () async {},
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -92,7 +97,10 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(
             theme: OfflineTheme.light,
-            home: OfflineHome(environment: fixture.environment),
+            home: OfflineHome(
+              environment: fixture.environment,
+              onEnvironmentReload: () async {},
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -151,7 +159,10 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: OfflineTheme.light,
-        home: OfflineHome(environment: fixture.environment),
+        home: OfflineHome(
+          environment: fixture.environment,
+          onEnvironmentReload: () async {},
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -222,6 +233,8 @@ class _HomeFixture {
         databaseFactory: databaseFactoryFfi,
         overlayDatabase: overlay,
       ),
+      wecomDataSources: const _UnavailableDataSourceManager(),
+      wecomSourceDirectories: const _UnavailableSourceDirectoryAccess(),
     );
     return _HomeFixture(
       environment: environment,
@@ -410,4 +423,49 @@ class _MemoryAdminCredentialStore implements AdminCredentialStore {
   Future<void> save(AdminPinCredential credential) async {
     this.credential = credential;
   }
+}
+
+class _UnavailableDataSourceManager implements WeComDataSourceManager {
+  const _UnavailableDataSourceManager();
+
+  @override
+  Future<void> clearDefaultRawKey() async {}
+
+  @override
+  Future<bool> hasDefaultRawKey() async => false;
+
+  @override
+  Future<WeComSavedDataSource?> loadSelectedSource() async => null;
+
+  @override
+  Future<WeComPreparedDataSource> prepare(
+    Directory selectedDirectory, {
+    String? sourceLocator,
+    String? temporaryRawKeyHex,
+  }) =>
+      throw UnimplementedError();
+
+  @override
+  Future<WeComPreparedDataSource> prepareSaved({
+    String? temporaryRawKeyHex,
+  }) =>
+      throw UnimplementedError();
+
+  @override
+  Future<WeComDataSourceActivationResult> activate(
+    WeComPreparedDataSource prepared, {
+    int? selectedCorporationId,
+    String? defaultRawKeyToSave,
+  }) =>
+      throw UnimplementedError();
+}
+
+class _UnavailableSourceDirectoryAccess implements WeComSourceDirectoryAccess {
+  const _UnavailableSourceDirectoryAccess();
+
+  @override
+  Future<WeComSelectedSourceDirectory?> choose() => throw UnimplementedError();
+
+  @override
+  Future<Directory> resolve(String locator) => throw UnimplementedError();
 }

@@ -10,11 +10,16 @@ import '../data/system_attachment_opener.dart';
 import '../data/wecom_activity_repository.dart';
 import '../data/wecom_active_dataset_runtime.dart';
 import '../data/wecom_contact_repository.dart';
+import '../data/wecom_data_source_service.dart';
 import '../data/wecom_database_package.dart';
+import '../data/wecom_incremental_merge_planner.dart';
+import '../data/wecom_incremental_migration_service.dart';
+import '../data/wecom_identity_repository.dart';
 import '../data/wecom_local_simulation_repository.dart';
 import '../data/wecom_offline_conversation_repository.dart';
 import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
+import '../data/wecom_source_directory_access.dart';
 import '../domain/repositories.dart';
 import '../state/admin_access_controller.dart';
 import '../state/offline_demo_store.dart';
@@ -27,6 +32,8 @@ class OfflineEnvironment {
     required this.adminAccess,
     required this.wecomOverlayDatabase,
     required this.wecomDatasetResolver,
+    required this.wecomDataSources,
+    required this.wecomSourceDirectories,
     this.wecomRuntime,
   });
 
@@ -36,6 +43,8 @@ class OfflineEnvironment {
   final AdminAccessController adminAccess;
   final WeComOverlayDatabase wecomOverlayDatabase;
   final WeComActiveDatasetResolver wecomDatasetResolver;
+  final WeComDataSourceManager wecomDataSources;
+  final WeComSourceDirectoryAccess wecomSourceDirectories;
   final WeComActiveDatasetRuntime? wecomRuntime;
 
   bool _closed = false;
@@ -99,14 +108,35 @@ abstract final class OfflineBootstrap {
           WeComOverlayDatabase.fileName,
         ),
       );
+      final packageImporter = WeComDatabasePackageImporter(
+        contract: contract,
+        databaseFactory: resolvedFactory,
+      );
       final resolver = WeComActiveDatasetResolver(
         destinationRoot: wecomRoot,
-        packageImporter: WeComDatabasePackageImporter(
-          contract: contract,
-          databaseFactory: resolvedFactory,
-        ),
+        packageImporter: packageImporter,
         databaseFactory: resolvedFactory,
         overlayDatabase: overlayDatabase,
+      );
+      const sourceDirectories = PlatformWeComSourceDirectoryAccess();
+      final dataSources = WeComDataSourceService(
+        destinationRoot: wecomRoot,
+        packageImporter: packageImporter,
+        datasetResolver: resolver,
+        migrationService: WeComIncrementalMigrationService(
+          overlayDatabase: overlayDatabase,
+          planner: WeComIncrementalMergePlanner(
+            contract: contract,
+            databaseFactory: resolvedFactory,
+          ),
+          identityResolver: WeComIdentityResolver(resolvedFactory),
+        ),
+        overlayDatabase: overlayDatabase,
+        defaultKeyStore: SecureWeComDefaultKeyStore(),
+        selectionStore: FileWeComSourceSelectionStore(
+          File(p.join(wecomRoot.path, 'data_source.json')),
+        ),
+        sourceDirectoryResolver: sourceDirectories,
       );
 
       ContactRepository contactRepository;
@@ -169,6 +199,8 @@ abstract final class OfflineBootstrap {
         adminAccess: adminAccess,
         wecomOverlayDatabase: overlayDatabase,
         wecomDatasetResolver: resolver,
+        wecomDataSources: dataSources,
+        wecomSourceDirectories: sourceDirectories,
         wecomRuntime: runtime,
       );
     } catch (_) {

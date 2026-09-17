@@ -1,7 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 abstract final class WeComOverlaySchema {
-  static const version = 5;
+  static const version = 6;
 
   static const operationsTable = 'overlay_operations';
   static const mergeAttemptsTable = 'overlay_merge_attempts';
@@ -593,12 +593,93 @@ END
 ''',
   ];
 
+  static const version6UpgradeStatements = <String>[
+    'DROP TRIGGER IF EXISTS trg_overlay_dataset_activations_no_update',
+    'DROP TRIGGER IF EXISTS trg_overlay_dataset_activations_no_delete',
+    '''
+ALTER TABLE overlay_dataset_activations
+RENAME TO overlay_dataset_activations_v5
+''',
+    '''
+CREATE TABLE overlay_dataset_activations (
+  activation_id INTEGER PRIMARY KEY,
+  previous_dataset_id TEXT
+    CHECK (
+      previous_dataset_id IS NULL OR (
+        length(previous_dataset_id) = 64 AND
+        previous_dataset_id NOT GLOB '*[^0-9a-f]*'
+      )
+    ),
+  dataset_id TEXT NOT NULL
+    CHECK (
+      length(dataset_id) = 64 AND
+      dataset_id NOT GLOB '*[^0-9a-f]*'
+    ),
+  merge_id INTEGER UNIQUE
+    REFERENCES overlay_merge_attempts(merge_id) ON DELETE RESTRICT,
+  current_corp_id INTEGER CHECK (current_corp_id > 0),
+  current_user_id INTEGER CHECK (current_user_id > 0),
+  created_at_micros INTEGER NOT NULL CHECK (created_at_micros > 0),
+  CHECK (
+    (current_corp_id IS NULL AND current_user_id IS NULL) OR
+    (current_corp_id IS NOT NULL AND current_user_id IS NOT NULL)
+  ),
+  CHECK (
+    (previous_dataset_id IS NULL AND merge_id IS NULL) OR
+    (
+      previous_dataset_id IS NOT NULL AND
+      (
+        merge_id IS NULL OR
+        (merge_id IS NOT NULL AND previous_dataset_id <> dataset_id)
+      )
+    )
+  )
+)
+''',
+    '''
+INSERT INTO overlay_dataset_activations (
+  activation_id,
+  previous_dataset_id,
+  dataset_id,
+  merge_id,
+  current_corp_id,
+  current_user_id,
+  created_at_micros
+)
+SELECT
+  activation_id,
+  previous_dataset_id,
+  dataset_id,
+  merge_id,
+  current_corp_id,
+  current_user_id,
+  created_at_micros
+FROM overlay_dataset_activations_v5
+''',
+    'DROP TABLE overlay_dataset_activations_v5',
+    '''
+CREATE TRIGGER trg_overlay_dataset_activations_no_update
+BEFORE UPDATE ON overlay_dataset_activations
+BEGIN
+  SELECT RAISE(ABORT, 'dataset activations are append-only');
+END
+''',
+    '''
+CREATE TRIGGER trg_overlay_dataset_activations_no_delete
+BEFORE DELETE ON overlay_dataset_activations
+BEGIN
+  SELECT RAISE(ABORT, 'dataset activations are append-only');
+END
+''',
+  ];
+
   static const createStatements = <String>[
     ...version1CreateStatements,
     ...version2CreateStatements,
     ...version3UpgradeStatements,
     ...version4UpgradeStatements,
     ...version5UpgradeStatements,
+    ...version6UpgradeStatements,
   ];
 
   static Future<void> createCurrent(Database db) {
@@ -620,6 +701,7 @@ END
         ...version3UpgradeStatements,
         ...version4UpgradeStatements,
         ...version5UpgradeStatements,
+        ...version6UpgradeStatements,
       ]);
     }
     if (newVersion == version && oldVersion == 2) {
@@ -627,16 +709,24 @@ END
         ...version3UpgradeStatements,
         ...version4UpgradeStatements,
         ...version5UpgradeStatements,
+        ...version6UpgradeStatements,
       ]);
     }
     if (newVersion == version && oldVersion == 3) {
       return _execute(db, [
         ...version4UpgradeStatements,
         ...version5UpgradeStatements,
+        ...version6UpgradeStatements,
       ]);
     }
     if (newVersion == version && oldVersion == 4) {
-      return _execute(db, version5UpgradeStatements);
+      return _execute(db, [
+        ...version5UpgradeStatements,
+        ...version6UpgradeStatements,
+      ]);
+    }
+    if (newVersion == version && oldVersion == 5) {
+      return _execute(db, version6UpgradeStatements);
     }
     throw StateError(
       'Unsupported overlay schema upgrade: $oldVersion -> $newVersion',

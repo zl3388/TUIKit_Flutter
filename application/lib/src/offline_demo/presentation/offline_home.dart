@@ -10,9 +10,14 @@ import 'profile_page.dart';
 import 'workbench_page.dart';
 
 class OfflineHome extends StatefulWidget {
-  const OfflineHome({required this.environment, super.key});
+  const OfflineHome({
+    required this.environment,
+    required this.onEnvironmentReload,
+    super.key,
+  });
 
   final OfflineEnvironment environment;
+  final Future<void> Function() onEnvironmentReload;
 
   @override
   State<OfflineHome> createState() => _OfflineHomeState();
@@ -88,7 +93,11 @@ class _OfflineHomeState extends State<OfflineHome> with WidgetsBindingObserver {
           ),
           WorkbenchPage(environment: widget.environment),
           ProfilePage(environment: widget.environment),
-          if (isAdmin) AdminConsolePage(environment: environment),
+          if (isAdmin)
+            AdminConsolePage(
+              environment: environment,
+              onEnvironmentReload: widget.onEnvironmentReload,
+            ),
         ];
         return LayoutBuilder(
           builder: (context, constraints) {

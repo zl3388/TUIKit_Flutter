@@ -35,6 +35,19 @@ class _OfflineDemoAppState extends State<OfflineDemoApp> {
     });
   }
 
+  Future<void> _reloadEnvironment() async {
+    final previous = _resolvedEnvironment;
+    _resolvedEnvironment = null;
+    final reload = () async {
+      await previous?.close();
+      return _loadEnvironment();
+    }();
+    setState(() {
+      _environment = reload;
+    });
+    await reload;
+  }
+
   @override
   void dispose() {
     final environment = _resolvedEnvironment;
@@ -54,7 +67,10 @@ class _OfflineDemoAppState extends State<OfflineDemoApp> {
         future: _environment,
         builder: (context, snapshot) {
           if (snapshot.hasData) {
-            return OfflineHome(environment: snapshot.requireData);
+            return OfflineHome(
+              environment: snapshot.requireData,
+              onEnvironmentReload: _reloadEnvironment,
+            );
           }
           if (snapshot.hasError) {
             return _StartupError(error: snapshot.error, onRetry: _retry);

@@ -597,6 +597,52 @@ void main() {
     );
   });
 
+  test('upgrades version 5 and permits a direct cross-dataset activation',
+      () async {
+    const targetDatasetId =
+        'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+    final rawDatabase = await _openVersion5Database(databasePath);
+    await rawDatabase.insert(
+      WeComOverlaySchema.datasetActivationsTable,
+      {
+        'previous_dataset_id': null,
+        'dataset_id': datasetId,
+        'merge_id': null,
+        'current_corp_id': 100,
+        'current_user_id': 1,
+        'created_at_micros': 1,
+      },
+    );
+    await rawDatabase.close();
+
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    await database.connection.insert(
+      WeComOverlaySchema.datasetActivationsTable,
+      {
+        'previous_dataset_id': datasetId,
+        'dataset_id': targetDatasetId,
+        'merge_id': null,
+        'current_corp_id': 200,
+        'current_user_id': 2,
+        'created_at_micros': 2,
+      },
+    );
+
+    final activations = await database.connection.query(
+      WeComOverlaySchema.datasetActivationsTable,
+      orderBy: 'activation_id',
+    );
+    expect(await database.connection.getVersion(), WeComOverlaySchema.version);
+    expect(activations, hasLength(2));
+    expect(activations.first['dataset_id'], datasetId);
+    expect(activations.last['dataset_id'], targetDatasetId);
+    expect(activations.last['merge_id'], isNull);
+  });
+
   test('does not assign ambiguous version 3 operations to an identity',
       () async {
     final rawDatabase = await _openVersion3Database(databasePath);
@@ -750,6 +796,31 @@ Future<Database> _openVersion4Database(String databasePath) {
           await database.execute(statement);
         }
         for (final statement in WeComOverlaySchema.version4UpgradeStatements) {
+          await database.execute(statement);
+        }
+      },
+    ),
+  );
+}
+
+Future<Database> _openVersion5Database(String databasePath) {
+  return databaseFactoryFfi.openDatabase(
+    databasePath,
+    options: OpenDatabaseOptions(
+      version: 5,
+      singleInstance: false,
+      onCreate: (database, version) async {
+        await WeComOverlaySchema.createVersion1(database);
+        for (final statement in WeComOverlaySchema.version2CreateStatements) {
+          await database.execute(statement);
+        }
+        for (final statement in WeComOverlaySchema.version3UpgradeStatements) {
+          await database.execute(statement);
+        }
+        for (final statement in WeComOverlaySchema.version4UpgradeStatements) {
+          await database.execute(statement);
+        }
+        for (final statement in WeComOverlaySchema.version5UpgradeStatements) {
           await database.execute(statement);
         }
       },

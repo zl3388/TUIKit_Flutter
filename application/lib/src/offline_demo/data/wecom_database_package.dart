@@ -356,12 +356,14 @@ class WeComDatabasePackageImporter {
     required Directory sourceDirectory,
     required Directory destinationRoot,
     Map<String, String> defaultRawKeysBySalt = const {},
+    String? defaultRawKeyHex,
     String? temporaryRawKeyHex,
   }) {
     return _importPackage(
       sourceDirectory: sourceDirectory,
       destinationRoot: destinationRoot,
       defaultRawKeysBySalt: defaultRawKeysBySalt,
+      defaultRawKeyHex: defaultRawKeyHex,
       temporaryRawKeyHex: temporaryRawKeyHex,
     );
   }
@@ -371,6 +373,7 @@ class WeComDatabasePackageImporter {
     required Directory destinationRoot,
     required String datasetId,
     Map<String, String> defaultRawKeysBySalt = const {},
+    String? defaultRawKeyHex,
     String? temporaryRawKeyHex,
   }) async {
     if (!_datasetIdPattern.hasMatch(datasetId)) {
@@ -383,6 +386,7 @@ class WeComDatabasePackageImporter {
       sourceDirectory: sourceDirectory,
       destinationRoot: destinationRoot,
       defaultRawKeysBySalt: defaultRawKeysBySalt,
+      defaultRawKeyHex: defaultRawKeyHex,
       temporaryRawKeyHex: temporaryRawKeyHex,
       repairDatasetId: datasetId,
     );
@@ -392,6 +396,7 @@ class WeComDatabasePackageImporter {
     required Directory sourceDirectory,
     required Directory destinationRoot,
     required Map<String, String> defaultRawKeysBySalt,
+    required String? defaultRawKeyHex,
     required String? temporaryRawKeyHex,
     String? repairDatasetId,
   }) async {
@@ -439,6 +444,7 @@ class WeComDatabasePackageImporter {
           sourceDirectory: sourceDirectory,
           destinationRoot: destinationRoot,
           defaultRawKeysBySalt: defaultRawKeysBySalt,
+          defaultRawKeyHex: defaultRawKeyHex,
           temporaryRawKeyHex: temporaryRawKeyHex,
           repairDatasetId: repairDatasetId,
         );
@@ -459,6 +465,7 @@ class WeComDatabasePackageImporter {
           sourceDirectory: sourceDirectory,
           destinationRoot: destinationRoot,
           defaultRawKeysBySalt: defaultRawKeysBySalt,
+          defaultRawKeyHex: defaultRawKeyHex,
           temporaryRawKeyHex: temporaryRawKeyHex,
           repairDatasetId: repairDatasetId,
         );
@@ -601,6 +608,7 @@ class WeComDatabasePackageImporter {
     required Directory sourceDirectory,
     required Directory destinationRoot,
     required Map<String, String> defaultRawKeysBySalt,
+    required String? defaultRawKeyHex,
     required String? temporaryRawKeyHex,
     required String? repairDatasetId,
   }) async {
@@ -682,6 +690,7 @@ class WeComDatabasePackageImporter {
               outputFile: preparedFile,
               fileName: database.fileName,
               defaultRawKeysBySalt: defaultRawKeysBySalt,
+              defaultRawKeyHex: defaultRawKeyHex,
               temporaryRawKeyHex: temporaryRawKeyHex,
             );
           }
@@ -697,6 +706,7 @@ class WeComDatabasePackageImporter {
         sourceDirectory: temporaryDirectory,
         destinationRoot: destinationRoot,
         defaultRawKeysBySalt: const {},
+        defaultRawKeyHex: null,
         temporaryRawKeyHex: null,
         repairDatasetId: repairDatasetId,
       );
@@ -842,6 +852,7 @@ class WeComDatabasePackageImporter {
     required File outputFile,
     required String fileName,
     required Map<String, String> defaultRawKeysBySalt,
+    required String? defaultRawKeyHex,
     required String? temporaryRawKeyHex,
   }) async {
     late String salt;
@@ -860,6 +871,9 @@ class WeComDatabasePackageImporter {
     final defaultKey = _defaultKeyForSalt(defaultRawKeysBySalt, salt);
     if (defaultKey != null) {
       keys.add(defaultKey);
+    }
+    if (defaultRawKeyHex != null && !keys.contains(defaultRawKeyHex)) {
+      keys.add(defaultRawKeyHex);
     }
     if (temporaryRawKeyHex != null && !keys.contains(temporaryRawKeyHex)) {
       keys.add(temporaryRawKeyHex);
