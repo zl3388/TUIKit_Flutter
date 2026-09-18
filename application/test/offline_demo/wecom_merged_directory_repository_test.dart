@@ -2,11 +2,13 @@ import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_contact_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_directory_editor.dart';
 import 'package:application/src/offline_demo/data/wecom_directory_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_directory_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
+import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -21,6 +23,7 @@ void main() {
   late Database baseDatabase;
   late WeComOverlayDatabase overlayDatabase;
   late WeComOverlayCommandService commands;
+  late WeComDirectoryEditor editor;
   late WeComMergedDirectoryRepository repository;
 
   setUpAll(() async {
@@ -66,6 +69,11 @@ void main() {
       ),
       baseRepository: WeComDirectoryRepository(baseDatabase),
       overlayDatabase: overlayDatabase,
+    );
+    editor = WeComDirectoryEditor(
+      datasetId: datasetId,
+      directory: repository,
+      commands: commands,
     );
   });
 
@@ -195,6 +203,7 @@ void main() {
       organizationUnitId: '20',
     );
     expect(childContacts.map((contact) => contact.id), ['1']);
+    expect(childContacts.single.organizationUnitId, '10');
     expect(childContacts.single.departmentName, 'Root');
     expect(childContacts.single.jobTitle, 'Legacy position');
 
@@ -202,8 +211,206 @@ void main() {
       organizationUnitId: '10',
     );
     expect(rootContacts.map((contact) => contact.id), ['1', '2']);
+    expect(rootContacts.last.organizationUnitId, '10');
     expect(rootContacts.last.departmentName, 'Root');
     expect(rootContacts.last.jobTitle, 'Lead');
+  });
+
+  test('edits a contact and its composite-key membership then undoes it',
+      () async {
+    final edit = await editor.updateContact(
+      contactId: 2,
+      displayName: 'Renamed second',
+      jobTitle: 'Director',
+      departmentId: 10,
+    );
+
+    final projected = await WeComContactRepository(
+      repository,
+      currentCorporationId: 700,
+    ).listContacts(organizationUnitId: '10');
+    final contact = projected.singleWhere((item) => item.id == '2');
+    expect(contact.displayName, 'Renamed second');
+    expect(contact.jobTitle, 'Director');
+
+    final baseContact = await baseDatabase.query(
+      'user_table',
+      columns: ['real_name'],
+      where: 'id = ?',
+      whereArgs: [2],
+    );
+    final baseMembership = await baseDatabase.query(
+      'user_dept_tableV2',
+      columns: ['job'],
+      where: 'department_id = ? AND user_id = ?',
+      whereArgs: [10, 2],
+    );
+    expect(baseContact.single['real_name'], '');
+    expect(baseMembership.single['job'], 'Lead');
+
+    final reopenedRepository = WeComMergedDirectoryRepository(
+      datasetId: datasetId,
+      identityScope: const WeComIdentityScope(
+        corporationId: 700,
+        userId: 1,
+      ),
+      baseRepository: WeComDirectoryRepository(baseDatabase),
+      overlayDatabase: overlayDatabase,
+    );
+    final reopenedContact = (await WeComContactRepository(
+      reopenedRepository,
+      currentCorporationId: 700,
+    ).listContacts(organizationUnitId: '10'))
+        .singleWhere((item) => item.id == '2');
+    expect(reopenedContact.displayName, 'Renamed second');
+    expect(reopenedContact.jobTitle, 'Director');
+
+    await editor.undo(edit);
+    final restored = await WeComContactRepository(
+      repository,
+      currentCorporationId: 700,
+    ).listContacts(organizationUnitId: '10');
+    final restoredContact = restored.singleWhere((item) => item.id == '2');
+    expect(restoredContact.displayName, 'Second');
+    expect(restoredContact.jobTitle, 'Lead');
+    await expectLater(editor.undo(edit), throwsStateError);
+
+    final operations = await overlayDatabase.connection.query(
+      WeComOverlaySchema.operationsTable,
+      columns: [
+        'revision_id',
+        'table_name',
+        'row_key_json',
+        'reverts_revision_id'
+      ],
+      orderBy: 'revision_id',
+    );
+    expect(operations, hasLength(4));
+    expect(operations[1]['table_name'], 'user_dept_tableV2');
+    expect(
+      operations[1]['row_key_json'],
+      '{"department_id":10,"user_id":2}',
+    );
+    expect(operations[2]['reverts_revision_id'], operations[0]['revision_id']);
+    expect(operations[3]['reverts_revision_id'], operations[1]['revision_id']);
+  });
+
+  test('uses the contact position when no department membership exists',
+      () async {
+    final edit = await editor.updateContact(
+      contactId: 3,
+      displayName: 'Third renamed',
+      jobTitle: 'Analyst',
+    );
+
+    var contact = (await repository.listAllInternalContacts())
+        .singleWhere((item) => item.id == 3);
+    expect(contact.displayName, 'Third renamed');
+    expect(contact.position, 'Analyst');
+
+    await editor.undo(edit);
+    contact = (await repository.listAllInternalContacts())
+        .singleWhere((item) => item.id == 3);
+    expect(contact.displayName, 'Third');
+    expect(contact.position, '');
+  });
+
+  test('does not materialize unchanged display fallbacks into overlay',
+      () async {
+    await expectLater(
+      editor.updateContact(
+        contactId: 1,
+        displayName: 'Base real',
+        jobTitle: 'Legacy position',
+        departmentId: 10,
+      ),
+      throwsA(isA<WeComDirectoryNoChangesException>()),
+    );
+    await expectLater(
+      editor.updateContact(
+        contactId: 2,
+        displayName: 'Second',
+        jobTitle: 'Lead',
+        departmentId: 10,
+      ),
+      throwsA(isA<WeComDirectoryNoChangesException>()),
+    );
+    expect(
+      await overlayDatabase.connection.query(
+        WeComOverlaySchema.operationsTable,
+      ),
+      isEmpty,
+    );
+  });
+
+  test('clears the legacy position fallback and can undo the change', () async {
+    final edit = await editor.updateContact(
+      contactId: 1,
+      displayName: 'Base real',
+      jobTitle: '',
+      departmentId: 10,
+    );
+
+    var contact = (await WeComContactRepository(
+      repository,
+      currentCorporationId: 700,
+    ).listContacts(organizationUnitId: '10'))
+        .singleWhere((item) => item.id == '1');
+    expect(contact.jobTitle, isNull);
+    expect(edit.revisionIds, hasLength(1));
+
+    await editor.undo(edit);
+    contact = (await WeComContactRepository(
+      repository,
+      currentCorporationId: 700,
+    ).listContacts(organizationUnitId: '10'))
+        .singleWhere((item) => item.id == '1');
+    expect(contact.jobTitle, 'Legacy position');
+  });
+
+  test('renames a department within one identity scope and undoes it',
+      () async {
+    final otherIdentityRepository = WeComMergedDirectoryRepository(
+      datasetId: datasetId,
+      identityScope: const WeComIdentityScope(
+        corporationId: 701,
+        userId: 2,
+      ),
+      baseRepository: WeComDirectoryRepository(baseDatabase),
+      overlayDatabase: overlayDatabase,
+    );
+
+    final edit = await editor.renameDepartment(
+      departmentId: 10,
+      name: 'Renamed root',
+    );
+    expect(
+      (await repository.listDepartments())
+          .singleWhere((item) => item.id == 10)
+          .name,
+      'Renamed root',
+    );
+    expect(
+      (await otherIdentityRepository.listDepartments())
+          .singleWhere((item) => item.id == 10)
+          .name,
+      'Root',
+    );
+    final baseDepartment = await baseDatabase.query(
+      'department_tableV2',
+      columns: ['name'],
+      where: 'id = ?',
+      whereArgs: [10],
+    );
+    expect(baseDepartment.single['name'], 'Root');
+
+    await editor.undo(edit);
+    expect(
+      (await repository.listDepartments())
+          .singleWhere((item) => item.id == 10)
+          .name,
+      'Root',
+    );
   });
 
   test('isolates datasets and preserves pagination validation', () async {

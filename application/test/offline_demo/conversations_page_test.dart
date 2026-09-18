@@ -186,6 +186,7 @@ void main() {
 
     expect(find.byTooltip('2 人已读'), findsOneWidget);
     expect(find.byIcon(Icons.done_all_rounded), findsOneWidget);
+    expect(find.byTooltip('撤销本地模拟消息'), findsNothing);
   });
 
   testWidgets('separates messages only at local calendar-day boundaries',

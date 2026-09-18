@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../data/wecom_conversation_editor.dart';
 import '../domain/models.dart';
 import '../domain/repositories.dart';
 import '../state/offline_demo_store.dart';
@@ -9,9 +10,14 @@ import 'offline_theme.dart';
 import 'offline_widgets.dart';
 
 class ConversationsPage extends StatefulWidget {
-  const ConversationsPage({required this.store, super.key});
+  const ConversationsPage({
+    required this.store,
+    this.conversationEditor,
+    super.key,
+  });
 
   final OfflineDemoStore store;
+  final WeComConversationEditor? conversationEditor;
 
   @override
   State<ConversationsPage> createState() => _ConversationsPageState();
@@ -51,6 +57,7 @@ class _ConversationsPageState extends State<ConversationsPage> {
             conversation: current,
             currentProfileId: widget.store.profile?.id,
             store: widget.store,
+            conversationEditor: widget.conversationEditor,
           ),
         ),
       );
@@ -70,6 +77,9 @@ class _ConversationsPageState extends State<ConversationsPage> {
   ) async {
     try {
       switch (action) {
+        case _ConversationAction.renameGroup:
+          await _renameGroup(conversation);
+          break;
         case _ConversationAction.togglePinned:
           await widget.store.setConversationPinned(
             conversation.id,
@@ -115,6 +125,91 @@ class _ConversationsPageState extends State<ConversationsPage> {
         );
       }
     }
+  }
+
+  Future<void> _renameGroup(OfflineConversation conversation) async {
+    final editor = widget.conversationEditor;
+    if (editor == null || conversation.type != 'group') {
+      return;
+    }
+    final controller = TextEditingController(
+      text: conversation.titleRemark ?? '',
+    );
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('编辑群聊备注'),
+        content: TextField(
+          key: const Key('group-title-remark'),
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '群聊备注',
+            hintText: '留空恢复群聊原名称',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('save-group-title-remark'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    final remark = controller.text;
+    controller.dispose();
+    if (submitted != true || !mounted) {
+      return;
+    }
+    try {
+      final edit = await editor.renameGroup(
+        conversationId: conversation.id,
+        roomNameRemark: remark,
+      );
+      await widget.store.refreshConversations();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('群聊备注已保存'),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _undoGroupRename(editor, edit),
+          ),
+        ),
+      );
+    } on WeComConversationNoChangesException {
+      _showMessage('没有需要保存的更改');
+    }
+  }
+
+  Future<void> _undoGroupRename(
+    WeComConversationEditor editor,
+    WeComConversationEdit edit,
+  ) async {
+    try {
+      await editor.undo(edit);
+      await widget.store.refreshConversations();
+      if (mounted) {
+        _showMessage('已撤销群聊备注修改');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showMessage('撤销失败');
+      }
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
@@ -189,6 +284,8 @@ class _ConversationsPageState extends State<ConversationsPage> {
                             ? () => _openConversation(conversation)
                             : null,
                         features: store.repositories.conversations.features,
+                        canRename: widget.conversationEditor != null &&
+                            conversation.type == 'group',
                         onAction: (action) =>
                             _handleConversationAction(conversation, action),
                       );
@@ -343,7 +440,13 @@ class _Metric extends StatelessWidget {
   }
 }
 
-enum _ConversationAction { togglePinned, toggleMuted, markRead, delete }
+enum _ConversationAction {
+  renameGroup,
+  togglePinned,
+  toggleMuted,
+  markRead,
+  delete,
+}
 
 class _ConversationTile extends StatelessWidget {
   const _ConversationTile({
@@ -351,12 +454,14 @@ class _ConversationTile extends StatelessWidget {
     required this.onTap,
     required this.onAction,
     required this.features,
+    required this.canRename,
   });
 
   final OfflineConversation conversation;
   final VoidCallback? onTap;
   final ValueChanged<_ConversationAction> onAction;
   final Set<ConversationFeature> features;
+  final bool canRename;
 
   @override
   Widget build(BuildContext context) {
@@ -388,7 +493,8 @@ class _ConversationTile extends StatelessWidget {
                       color: const Color(0xFF7A878D),
                     ),
               ),
-            if (features.contains(ConversationFeature.pin) ||
+            if (canRename ||
+                features.contains(ConversationFeature.pin) ||
                 features.contains(ConversationFeature.mute) ||
                 (conversation.unreadCount > 0 &&
                     features.contains(ConversationFeature.markRead)) ||
@@ -401,6 +507,14 @@ class _ConversationTile extends StatelessWidget {
                   onSelected: onAction,
                   icon: const Icon(Icons.more_vert_rounded, size: 20),
                   itemBuilder: (context) => [
+                    if (canRename)
+                      const PopupMenuItem(
+                        value: _ConversationAction.renameGroup,
+                        child: _MenuLabel(
+                          icon: Icons.edit_outlined,
+                          label: '编辑群聊备注',
+                        ),
+                      ),
                     if (features.contains(ConversationFeature.pin))
                       PopupMenuItem(
                         value: _ConversationAction.togglePinned,
@@ -523,12 +637,14 @@ class ConversationPage extends StatefulWidget {
     required this.conversation,
     required this.currentProfileId,
     required this.store,
+    this.conversationEditor,
     super.key,
   });
 
   final OfflineConversation conversation;
   final String? currentProfileId;
   final OfflineDemoStore store;
+  final WeComConversationEditor? conversationEditor;
 
   @override
   State<ConversationPage> createState() => _ConversationPageState();
@@ -729,6 +845,53 @@ class _ConversationPageState extends State<ConversationPage> {
     }
   }
 
+  Future<void> _cancelLocalMessage(OfflineMessage message) async {
+    final editor = widget.conversationEditor;
+    if (editor == null) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('撤销本地模拟消息'),
+        content: const Text('该操作只移除本应用的模拟消息，不会修改 WeCom 数据。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('confirm-cancel-local-message'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('撤销'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    try {
+      await editor.cancelLocalMessage(
+        conversationId: widget.conversation.id,
+        messageId: message.id,
+      );
+      await _loadMessages();
+      await widget.store.refreshConversations();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已撤销本地模拟消息')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('模拟消息撤销失败')),
+        );
+      }
+    }
+  }
+
   void _scheduleScrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) {
@@ -796,6 +959,12 @@ class _ConversationPageState extends State<ConversationPage> {
                   isMine: message.senderProfileId == widget.currentProfileId,
                   attachments: _attachmentsByMessageId[message.id] ?? const [],
                   onOpenAttachment: _openAttachment,
+                  onCancelLocalMessage: widget.conversationEditor != null &&
+                          message.progressSource ==
+                              OfflineMessageProgressSource.localSimulation &&
+                          message.id.startsWith('local:')
+                      ? () => _cancelLocalMessage(message)
+                      : null,
                 ),
             ],
           );
@@ -899,12 +1068,14 @@ class _MessageBubble extends StatelessWidget {
     required this.isMine,
     required this.attachments,
     required this.onOpenAttachment,
+    required this.onCancelLocalMessage,
   });
 
   final OfflineMessage message;
   final bool isMine;
   final List<OfflineAttachment> attachments;
   final ValueChanged<OfflineAttachment> onOpenAttachment;
+  final VoidCallback? onCancelLocalMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -990,6 +1161,15 @@ class _MessageBubble extends StatelessWidget {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (onCancelLocalMessage != null)
+                      IconButton(
+                        key: Key('cancel-local-message-${message.id}'),
+                        tooltip: '撤销本地模拟消息',
+                        onPressed: onCancelLocalMessage,
+                        visualDensity: VisualDensity.compact,
+                        iconSize: 16,
+                        icon: const Icon(Icons.undo_rounded),
+                      ),
                     Text(
                       formatTime(message.sentAt),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(

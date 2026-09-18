@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/wecom_directory_editor.dart';
 import '../domain/models.dart';
 import 'group_directory_page.dart';
 import 'offline_theme.dart';
@@ -8,6 +9,7 @@ import 'offline_widgets.dart';
 class ContactsPage extends StatelessWidget {
   const ContactsPage({
     required this.contactsAvailable,
+    required this.directoryEditor,
     required this.organizationUnits,
     required this.groups,
     required this.contacts,
@@ -18,6 +20,7 @@ class ContactsPage extends StatelessWidget {
   });
 
   final bool contactsAvailable;
+  final WeComDirectoryEditor? directoryEditor;
   final List<OrgUnit> organizationUnits;
   final List<OfflineConversation> groups;
   final List<DirectoryContact> contacts;
@@ -63,6 +66,8 @@ class ContactsPage extends StatelessWidget {
                     builder: (context) => OrganizationDirectoryPage(
                       organizationUnits: organizationUnits,
                       loadContacts: loadOrganizationContacts,
+                      directoryEditor: directoryEditor,
+                      onChanged: onRefresh,
                     ),
                   ),
                 ),
@@ -115,23 +120,60 @@ class ContactsPage extends StatelessWidget {
           final contactIndex = index -
               (organizationUnits.isEmpty ? 0 : 1) -
               (groups.isEmpty ? 0 : 1);
-          return _contactTile(context, contacts[contactIndex]);
+          return _contactTile(
+            context,
+            contacts[contactIndex],
+            directoryEditor: directoryEditor,
+            onChanged: onRefresh,
+          );
         },
       ),
     );
   }
 }
 
-class ContactDetailPage extends StatelessWidget {
-  const ContactDetailPage({required this.contact, super.key});
+class ContactDetailPage extends StatefulWidget {
+  const ContactDetailPage({
+    required this.contact,
+    required this.directoryEditor,
+    required this.onChanged,
+    super.key,
+  });
 
   final DirectoryContact contact;
+  final WeComDirectoryEditor? directoryEditor;
+  final Future<void> Function() onChanged;
+
+  @override
+  State<ContactDetailPage> createState() => _ContactDetailPageState();
+}
+
+class _ContactDetailPageState extends State<ContactDetailPage> {
+  late DirectoryContact _contact;
+
+  @override
+  void initState() {
+    super.initState();
+    _contact = widget.contact;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final contact = _contact;
     final summary = _contactSummary(contact, includeAccount: false);
     return Scaffold(
-      appBar: AppBar(title: const Text('联系人详情')),
+      appBar: AppBar(
+        title: const Text('联系人详情'),
+        actions: [
+          if (widget.directoryEditor != null)
+            IconButton(
+              key: const Key('edit-contact'),
+              tooltip: '编辑联系人',
+              onPressed: _edit,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
+      ),
       body: ListView(
         children: [
           Container(
@@ -194,28 +236,157 @@ class ContactDetailPage extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _edit() async {
+    final nameController = TextEditingController(text: _contact.displayName);
+    final jobController = TextEditingController(text: _contact.jobTitle ?? '');
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('编辑联系人'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              key: const Key('contact-display-name'),
+              controller: nameController,
+              decoration: const InputDecoration(labelText: '显示名'),
+            ),
+            TextField(
+              key: const Key('contact-job-title'),
+              controller: jobController,
+              decoration: const InputDecoration(labelText: '职位'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('save-contact'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (submitted != true || !mounted) {
+      nameController.dispose();
+      jobController.dispose();
+      return;
+    }
+    final displayName = nameController.text.trim();
+    final jobTitle = jobController.text.trim();
+    nameController.dispose();
+    jobController.dispose();
+    if (displayName.isEmpty) {
+      _showMessage('显示名不能为空');
+      return;
+    }
+    final previous = _contact;
+    try {
+      final edit = await widget.directoryEditor!.updateContact(
+        contactId: int.parse(previous.id),
+        displayName: displayName,
+        jobTitle: jobTitle,
+        departmentId: int.tryParse(previous.organizationUnitId ?? ''),
+      );
+      await widget.onChanged();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _contact = DirectoryContact(
+          id: previous.id,
+          displayName: displayName,
+          account: previous.account,
+          organizationName: previous.organizationName,
+          organizationUnitId: previous.organizationUnitId,
+          departmentName: previous.departmentName,
+          jobTitle: jobTitle.isEmpty ? null : jobTitle,
+        );
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('联系人已保存'),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _undo(edit, previous),
+          ),
+        ),
+      );
+    } on WeComDirectoryNoChangesException {
+      _showMessage('没有需要保存的更改');
+    } catch (_) {
+      _showMessage('联系人保存失败');
+    }
+  }
+
+  Future<void> _undo(
+    WeComDirectoryEdit edit,
+    DirectoryContact previous,
+  ) async {
+    try {
+      await widget.directoryEditor!.undo(edit);
+      await widget.onChanged();
+      if (mounted) {
+        setState(() => _contact = previous);
+        _showMessage('已撤销联系人修改');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showMessage('撤销失败');
+      }
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
 }
 
-class OrganizationDirectoryPage extends StatelessWidget {
+class OrganizationDirectoryPage extends StatefulWidget {
   const OrganizationDirectoryPage({
     required this.organizationUnits,
     required this.loadContacts,
+    required this.directoryEditor,
+    required this.onChanged,
     super.key,
   });
 
   final List<OrgUnit> organizationUnits;
   final Future<List<DirectoryContact>> Function(String organizationUnitId)
       loadContacts;
+  final WeComDirectoryEditor? directoryEditor;
+  final Future<void> Function() onChanged;
+
+  @override
+  State<OrganizationDirectoryPage> createState() =>
+      _OrganizationDirectoryPageState();
+}
+
+class _OrganizationDirectoryPageState extends State<OrganizationDirectoryPage> {
+  late List<OrgUnit> _units;
+
+  @override
+  void initState() {
+    super.initState();
+    _units = widget.organizationUnits;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final unitIds = organizationUnits.map((unit) => unit.id).toSet();
-    final roots = organizationUnits
+    final unitIds = _units.map((unit) => unit.id).toSet();
+    final roots = _units
         .where(
           (unit) => unit.parentId == null || !unitIds.contains(unit.parentId),
         )
         .toList(growable: false);
-    final visibleRoots = roots.isEmpty ? organizationUnits : roots;
+    final visibleRoots = roots.isEmpty ? _units : roots;
     return Scaffold(
       appBar: AppBar(title: const Text('组织架构')),
       body: ListView.separated(
@@ -224,11 +395,23 @@ class OrganizationDirectoryPage extends StatelessWidget {
         itemBuilder: (context, index) => _departmentTile(
           context,
           visibleRoots[index],
-          organizationUnits,
-          loadContacts,
+          _units,
+          widget.loadContacts,
+          directoryEditor: widget.directoryEditor,
+          onChanged: widget.onChanged,
+          onDepartmentChanged: _replaceDepartment,
         ),
       ),
     );
+  }
+
+  void _replaceDepartment(OrgUnit updated) {
+    setState(() {
+      _units = [
+        for (final unit in _units)
+          if (unit.id == updated.id) updated else unit,
+      ];
+    });
   }
 }
 
@@ -237,12 +420,18 @@ class _DepartmentDirectoryPage extends StatefulWidget {
     required this.department,
     required this.organizationUnits,
     required this.loadContacts,
+    required this.directoryEditor,
+    required this.onChanged,
+    required this.onDepartmentChanged,
   });
 
   final OrgUnit department;
   final List<OrgUnit> organizationUnits;
   final Future<List<DirectoryContact>> Function(String organizationUnitId)
       loadContacts;
+  final WeComDirectoryEditor? directoryEditor;
+  final Future<void> Function() onChanged;
+  final ValueChanged<OrgUnit> onDepartmentChanged;
 
   @override
   State<_DepartmentDirectoryPage> createState() =>
@@ -251,23 +440,36 @@ class _DepartmentDirectoryPage extends StatefulWidget {
 
 class _DepartmentDirectoryPageState extends State<_DepartmentDirectoryPage> {
   late Future<List<DirectoryContact>> _contacts;
+  late OrgUnit _department;
+  late List<OrgUnit> _units;
 
   @override
   void initState() {
     super.initState();
-    _contacts = widget.loadContacts(widget.department.id);
+    _department = widget.department;
+    _units = widget.organizationUnits;
+    _contacts = widget.loadContacts(_department.id);
   }
 
   @override
   Widget build(BuildContext context) {
-    final children = widget.organizationUnits
-        .where((unit) => unit.parentId == widget.department.id)
+    final children = _units
+        .where((unit) => unit.parentId == _department.id)
         .toList(growable: false);
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.department.name.isEmpty ? '未命名部门' : widget.department.name,
+          _department.name.isEmpty ? '未命名部门' : _department.name,
         ),
+        actions: [
+          if (widget.directoryEditor != null)
+            IconButton(
+              key: const Key('edit-department'),
+              tooltip: '编辑部门',
+              onPressed: _renameDepartment,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
       ),
       body: FutureBuilder<List<DirectoryContact>>(
         future: _contacts,
@@ -301,12 +503,21 @@ class _DepartmentDirectoryPageState extends State<_DepartmentDirectoryPage> {
                   _departmentTile(
                     context,
                     child,
-                    widget.organizationUnits,
+                    _units,
                     widget.loadContacts,
+                    directoryEditor: widget.directoryEditor,
+                    onChanged: widget.onChanged,
+                    onDepartmentChanged: _replaceDepartment,
                   ),
                 if (contacts.isNotEmpty)
                   const _DirectorySectionHeader(label: '成员'),
-                for (final contact in contacts) _contactTile(context, contact),
+                for (final contact in contacts)
+                  _contactTile(
+                    context,
+                    contact,
+                    directoryEditor: widget.directoryEditor,
+                    onChanged: _reload,
+                  ),
               ],
             ),
           );
@@ -317,9 +528,113 @@ class _DepartmentDirectoryPageState extends State<_DepartmentDirectoryPage> {
 
   Future<void> _reload() async {
     setState(() {
-      _contacts = widget.loadContacts(widget.department.id);
+      _contacts = widget.loadContacts(_department.id);
     });
     await _contacts;
+  }
+
+  Future<void> _renameDepartment() async {
+    final controller = TextEditingController(text: _department.name);
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('编辑部门'),
+        content: TextField(
+          key: const Key('department-name'),
+          controller: controller,
+          decoration: const InputDecoration(labelText: '部门名称'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('save-department'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (submitted != true || !mounted) {
+      controller.dispose();
+      return;
+    }
+    final name = controller.text.trim();
+    controller.dispose();
+    if (name.isEmpty) {
+      _showMessage('部门名称不能为空');
+      return;
+    }
+    final previous = _department;
+    try {
+      final edit = await widget.directoryEditor!.renameDepartment(
+        departmentId: int.parse(previous.id),
+        name: name,
+      );
+      await widget.onChanged();
+      if (!mounted) {
+        return;
+      }
+      final updated = OrgUnit(
+        id: previous.id,
+        name: name,
+        parentId: previous.parentId,
+        sortOrder: previous.sortOrder,
+      );
+      _replaceDepartment(updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('部门已保存'),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _undoDepartment(edit, previous),
+          ),
+        ),
+      );
+    } on WeComDirectoryNoChangesException {
+      _showMessage('没有需要保存的更改');
+    } catch (_) {
+      _showMessage('部门保存失败');
+    }
+  }
+
+  Future<void> _undoDepartment(
+    WeComDirectoryEdit edit,
+    OrgUnit previous,
+  ) async {
+    try {
+      await widget.directoryEditor!.undo(edit);
+      await widget.onChanged();
+      if (mounted) {
+        _replaceDepartment(previous);
+        _showMessage('已撤销部门修改');
+      }
+    } catch (_) {
+      if (mounted) {
+        _showMessage('撤销失败');
+      }
+    }
+  }
+
+  void _replaceDepartment(OrgUnit updated) {
+    setState(() {
+      _units = [
+        for (final unit in _units)
+          if (unit.id == updated.id) updated else unit,
+      ];
+      if (_department.id == updated.id) {
+        _department = updated;
+      }
+    });
+    widget.onDepartmentChanged(updated);
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 }
 
@@ -348,8 +663,11 @@ Widget _departmentTile(
   OrgUnit unit,
   List<OrgUnit> organizationUnits,
   Future<List<DirectoryContact>> Function(String organizationUnitId)
-      loadContacts,
-) {
+      loadContacts, {
+  required WeComDirectoryEditor? directoryEditor,
+  required Future<void> Function() onChanged,
+  required ValueChanged<OrgUnit> onDepartmentChanged,
+}) {
   return Material(
     color: Colors.white,
     child: ListTile(
@@ -360,6 +678,9 @@ Widget _departmentTile(
             department: unit,
             organizationUnits: organizationUnits,
             loadContacts: loadContacts,
+            directoryEditor: directoryEditor,
+            onChanged: onChanged,
+            onDepartmentChanged: onDepartmentChanged,
           ),
         ),
       ),
@@ -431,14 +752,23 @@ String? _contactSummary(
   return parts.isEmpty ? null : parts.join(' · ');
 }
 
-Widget _contactTile(BuildContext context, DirectoryContact contact) {
+Widget _contactTile(
+  BuildContext context,
+  DirectoryContact contact, {
+  required WeComDirectoryEditor? directoryEditor,
+  required Future<void> Function() onChanged,
+}) {
   final summary = _contactSummary(contact);
   return Material(
     color: Colors.white,
     child: ListTile(
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (context) => ContactDetailPage(contact: contact),
+          builder: (context) => ContactDetailPage(
+            contact: contact,
+            directoryEditor: directoryEditor,
+            onChanged: onChanged,
+          ),
         ),
       ),
       leading: OfflineAvatar(

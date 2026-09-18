@@ -79,9 +79,14 @@ class _OfflineHomeState extends State<OfflineHome> with WidgetsBindingObserver {
         final selectedIndex =
             _sectionIndex < sections.length ? _sectionIndex : 0;
         final pages = <Widget>[
-          ConversationsPage(store: store),
+          ConversationsPage(
+            store: store,
+            conversationEditor:
+                isAdmin ? environment.wecomConversationEditor : null,
+          ),
           ContactsPage(
             contactsAvailable: store.contactsAvailable,
+            directoryEditor: isAdmin ? environment.wecomDirectoryEditor : null,
             organizationUnits: store.organizationUnits,
             groups: store.conversations
                 .where((conversation) => conversation.type == 'group')

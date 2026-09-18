@@ -48,6 +48,7 @@ void main() {
     expect(find.text('Example Corp'), findsWidgets);
     expect(find.text('职位'), findsOneWidget);
     expect(find.text('Engineer'), findsWidgets);
+    expect(find.byKey(const Key('edit-contact')), findsNothing);
     expect(find.byIcon(Icons.phone_outlined), findsNothing);
     expect(find.byIcon(Icons.email_outlined), findsNothing);
   });
@@ -175,6 +176,7 @@ Widget _testApp({
     home: Scaffold(
       body: ContactsPage(
         contactsAvailable: contactsAvailable,
+        directoryEditor: null,
         organizationUnits: organizationUnits,
         groups: groups,
         contacts: contacts,

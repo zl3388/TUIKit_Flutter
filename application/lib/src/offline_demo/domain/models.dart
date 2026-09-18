@@ -64,6 +64,7 @@ class DirectoryContact {
     required this.displayName,
     this.account,
     this.organizationName,
+    this.organizationUnitId,
     this.departmentName,
     this.jobTitle,
   });
@@ -72,6 +73,7 @@ class DirectoryContact {
   final String displayName;
   final String? account;
   final String? organizationName;
+  final String? organizationUnitId;
   final String? departmentName;
   final String? jobTitle;
 
@@ -81,6 +83,7 @@ class DirectoryContact {
         displayName: row['display_name']! as String,
         account: row['account'] as String?,
         organizationName: row['organization_name'] as String?,
+        organizationUnitId: row['organization_unit_id'] as String?,
         departmentName: row['department_name'] as String?,
         jobTitle: row['job_title'] as String?,
       );
@@ -98,12 +101,14 @@ class OfflineConversation {
     required this.isPinned,
     required this.isMuted,
     this.avatarPath,
+    this.titleRemark,
   });
 
   final String id;
   final String type;
   final String title;
   final String? avatarPath;
+  final String? titleRemark;
   final String lastMessagePreview;
   final DateTime? lastMessageAt;
   final String draftText;

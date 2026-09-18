@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_conversation_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_conversation_editor.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
@@ -23,11 +24,15 @@ import 'wecom_message_test_fixture.dart';
 void main() {
   const datasetId =
       '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  const identityScope = WeComIdentityScope(corporationId: 100, userId: 1);
   late Directory temporaryDirectory;
   late Database baseDatabase;
   late Database messageDatabase;
   late Database lookupDatabase;
   late WeComOverlayDatabase overlayDatabase;
+  late WeComPackageContract contract;
+  late WeComMergedConversationRepository mergedConversations;
+  late WeComOverlayCommandService commands;
   late WeComOfflineConversationRepository repository;
 
   setUpAll(sqfliteFfiInit);
@@ -189,7 +194,7 @@ void main() {
       factory: databaseFactoryFfi,
       databasePath: p.join(temporaryDirectory.path, 'overlay.db'),
     );
-    final contract = WeComPackageContract.fromJsonString(
+    contract = WeComPackageContract.fromJsonString(
       await File(
         p.join(
           Directory.current.path,
@@ -199,31 +204,27 @@ void main() {
         ),
       ).readAsString(),
     );
+    mergedConversations = WeComMergedConversationRepository(
+      datasetId: datasetId,
+      identityScope: identityScope,
+      baseRepository: WeComConversationRepository(baseDatabase),
+      overlayDatabase: overlayDatabase,
+    );
+    commands = WeComOverlayCommandService(
+      overlayDatabase: overlayDatabase,
+      contract: contract,
+      identityScope: identityScope,
+    );
     repository = WeComOfflineConversationRepository(
       datasetId: datasetId,
       currentUserId: 1,
-      conversations: WeComMergedConversationRepository(
-        datasetId: datasetId,
-        identityScope: const WeComIdentityScope(
-          corporationId: 100,
-          userId: 1,
-        ),
-        baseRepository: WeComConversationRepository(baseDatabase),
-        overlayDatabase: overlayDatabase,
-      ),
+      conversations: mergedConversations,
       messages: WeComMessageRepository(
         messageDatabase: messageDatabase,
         lookupDatabase: lookupDatabase,
       ),
       contacts: const _FixtureContacts(),
-      commands: WeComOverlayCommandService(
-        overlayDatabase: overlayDatabase,
-        contract: contract,
-        identityScope: const WeComIdentityScope(
-          corporationId: 100,
-          userId: 1,
-        ),
-      ),
+      commands: commands,
     );
   });
 
@@ -344,6 +345,144 @@ void main() {
     await expectLater(
       repository.deleteConversation('S:1_2'),
       throwsA(isA<UnsupportedError>()),
+    );
+  });
+
+  test('edits and undoes only the group conversation remark in overlay',
+      () async {
+    final editor = WeComConversationEditor(
+      datasetId: datasetId,
+      conversations: mergedConversations,
+      commands: commands,
+      simulation: WeComLocalSimulationRepository(
+        overlayDatabase: overlayDatabase,
+        identityScope: identityScope,
+      ),
+    );
+
+    final edit = await editor.renameGroup(
+      conversationId: 'R:room',
+      roomNameRemark: ' Local room ',
+    );
+    var group = (await repository.listConversations())
+        .singleWhere((item) => item.id == 'R:room');
+    expect(group.title, 'Local room');
+    expect(group.titleRemark, 'Local room');
+    expect(
+      await baseDatabase.query(
+        'conversation_table',
+        columns: ['name', 'roomname_remark'],
+        where: 'con_numeric_id = ?',
+        whereArgs: [2],
+      ),
+      [
+        {'name': 'Room', 'roomname_remark': ''},
+      ],
+    );
+
+    final reopened = WeComOfflineConversationRepository(
+      datasetId: datasetId,
+      currentUserId: 1,
+      conversations: WeComMergedConversationRepository(
+        datasetId: datasetId,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
+        baseRepository: WeComConversationRepository(baseDatabase),
+        overlayDatabase: overlayDatabase,
+      ),
+      messages: WeComMessageRepository(
+        messageDatabase: messageDatabase,
+        lookupDatabase: lookupDatabase,
+      ),
+      contacts: const _FixtureContacts(),
+      commands: WeComOverlayCommandService(
+        overlayDatabase: overlayDatabase,
+        contract: contract,
+        identityScope: const WeComIdentityScope(
+          corporationId: 100,
+          userId: 1,
+        ),
+      ),
+    );
+    group = (await reopened.listConversations())
+        .singleWhere((item) => item.id == 'R:room');
+    expect(group.title, 'Local room');
+
+    await editor.undo(edit);
+    group = (await repository.listConversations())
+        .singleWhere((item) => item.id == 'R:room');
+    expect(group.title, 'Room');
+    expect(group.titleRemark, isNull);
+    final revisions = await overlayDatabase.connection.query(
+      WeComOverlaySchema.operationsTable,
+      columns: ['values_json', 'reverts_revision_id'],
+      orderBy: 'revision_id ASC',
+    );
+    expect(revisions, hasLength(2));
+    expect(revisions[0]['values_json'], '{"roomname_remark":"Local room"}');
+    expect(revisions[1]['values_json'], '{"roomname_remark":""}');
+    expect(revisions[1]['reverts_revision_id'], edit.revisionId);
+    await expectLater(editor.undo(edit), throwsStateError);
+    await expectLater(
+      editor.renameGroup(
+        conversationId: 'S:1_2',
+        roomNameRemark: 'Not allowed',
+      ),
+      throwsUnsupportedError,
+    );
+  });
+
+  test('revokes only an active local simulated message', () async {
+    final simulation = WeComLocalSimulationRepository(
+      overlayDatabase: overlayDatabase,
+      identityScope: identityScope,
+    );
+    final exchange = await simulation.enqueueTextExchange(
+      conversationId: 'S:1_2',
+      senderProfileId: '1',
+      peerProfileId: '2',
+      text: 'local only',
+    );
+    final editor = WeComConversationEditor(
+      datasetId: datasetId,
+      conversations: mergedConversations,
+      commands: commands,
+      simulation: simulation,
+    );
+
+    await expectLater(
+      editor.cancelLocalMessage(
+        conversationId: 'S:1_2',
+        messageId: '2',
+      ),
+      throwsUnsupportedError,
+    );
+    await editor.cancelLocalMessage(
+      conversationId: 'S:1_2',
+      messageId: 'local:${exchange.eventKey}',
+    );
+    expect(await simulation.listExchanges(), isEmpty);
+    expect(
+      await overlayDatabase.connection.query(
+        WeComOverlaySchema.simulationEventsTable,
+        orderBy: 'event_id ASC',
+      ),
+      hasLength(2),
+    );
+    expect(
+      await overlayDatabase.connection.query(
+        WeComOverlaySchema.operationsTable,
+      ),
+      isEmpty,
+    );
+    await expectLater(
+      editor.cancelLocalMessage(
+        conversationId: 'S:1_2',
+        messageId: 'local:${exchange.eventKey}',
+      ),
+      throwsStateError,
     );
   });
 

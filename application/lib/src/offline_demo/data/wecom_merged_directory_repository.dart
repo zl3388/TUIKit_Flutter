@@ -16,7 +16,9 @@ class WeComMergedDirectoryRepository {
         _overlayDatabase = overlayDatabase;
 
   static const _databaseName = 'user.db';
-  static const _tableName = 'user_table';
+  static const _userTable = 'user_table';
+  static const _departmentTable = 'department_tableV2';
+  static const _membershipTable = 'user_dept_tableV2';
 
   final String datasetId;
   final WeComIdentityScope identityScope;
@@ -25,12 +27,103 @@ class WeComMergedDirectoryRepository {
 
   Future<List<WeComDepartment>> listDepartments({
     int? corporationId,
-  }) {
-    return _baseRepository.listDepartments(corporationId: corporationId);
+  }) async {
+    final base = await _baseRepository.listDepartments();
+    final visible = <int, _DepartmentState>{
+      for (final department in base)
+        department.id: _DepartmentState.fromDepartment(department),
+    };
+    for (final operation in await _readOperations(_departmentTable)) {
+      final rowKey = _decodeObject(
+        operation['row_key_json']! as String,
+        'row_key_json',
+      );
+      final id = rowKey['id'];
+      if (rowKey.length != 1 || id is! int) {
+        throw const FormatException(
+          'Invalid department_tableV2 overlay row key',
+        );
+      }
+      switch (operation['operation']) {
+        case 'tombstone':
+          visible.remove(id);
+        case 'upsert':
+          final valuesJson = operation['values_json'];
+          if (valuesJson is! String) {
+            throw const FormatException('Overlay upsert values are missing');
+          }
+          final state = visible[id] ?? _DepartmentState.empty(id);
+          state.apply(_decodeObject(valuesJson, 'values_json'));
+          visible[id] = state;
+        default:
+          throw FormatException(
+            'Unsupported overlay operation: ${operation['operation']}',
+          );
+      }
+    }
+    final departments = visible.values
+        .map((state) => state.toDepartment())
+        .where(
+          (department) =>
+              corporationId == null ||
+              department.corporationId == corporationId,
+        )
+        .toList(growable: false)
+      ..sort((left, right) => left.id.compareTo(right.id));
+    return List<WeComDepartment>.unmodifiable(departments);
   }
 
-  Future<List<WeComDepartmentMembership>> listDepartmentMemberships() {
-    return _baseRepository.listDepartmentMemberships();
+  Future<List<WeComDepartmentMembership>> listDepartmentMemberships() async {
+    final base = await _baseRepository.listDepartmentMemberships();
+    final visible = <String, _MembershipState>{
+      for (final membership in base)
+        _membershipKey(membership.departmentId, membership.userId):
+            _MembershipState.fromMembership(membership),
+    };
+    for (final operation in await _readOperations(_membershipTable)) {
+      final rowKey = _decodeObject(
+        operation['row_key_json']! as String,
+        'row_key_json',
+      );
+      final departmentId = rowKey['department_id'];
+      final userId = rowKey['user_id'];
+      if (rowKey.length != 2 || departmentId is! int || userId is! int) {
+        throw const FormatException(
+          'Invalid user_dept_tableV2 overlay row key',
+        );
+      }
+      final key = _membershipKey(departmentId, userId);
+      switch (operation['operation']) {
+        case 'tombstone':
+          visible.remove(key);
+        case 'upsert':
+          final valuesJson = operation['values_json'];
+          if (valuesJson is! String) {
+            throw const FormatException('Overlay upsert values are missing');
+          }
+          final state = visible[key] ??
+              _MembershipState.empty(
+                departmentId: departmentId,
+                userId: userId,
+              );
+          state.apply(_decodeObject(valuesJson, 'values_json'));
+          visible[key] = state;
+        default:
+          throw FormatException(
+            'Unsupported overlay operation: ${operation['operation']}',
+          );
+      }
+    }
+    final memberships = visible.values
+        .map((state) => state.toMembership())
+        .toList(growable: false)
+      ..sort((left, right) {
+        final department = left.departmentId.compareTo(right.departmentId);
+        return department != 0
+            ? department
+            : left.userId.compareTo(right.userId);
+      });
+    return List<WeComDepartmentMembership>.unmodifiable(memberships);
   }
 
   Future<List<WeComInternalContact>> listInternalContacts({
@@ -69,20 +162,7 @@ class WeComMergedDirectoryRepository {
       for (final contact in baseContacts)
         contact.id: _ContactState.fromContact(contact),
     };
-    final operations = await _overlayDatabase.connection.query(
-      WeComOverlaySchema.operationsTable,
-      columns: ['row_key_json', 'operation', 'values_json'],
-      where: 'dataset_id = ? AND identity_corp_id = ? '
-          'AND identity_user_id = ? AND database_name = ? AND table_name = ?',
-      whereArgs: [
-        datasetId,
-        identityScope.corporationId,
-        identityScope.userId,
-        _databaseName,
-        _tableName,
-      ],
-      orderBy: 'revision_id',
-    );
+    final operations = await _readOperations(_userTable);
 
     for (final operation in operations) {
       final rowKey = _decodeObject(
@@ -135,6 +215,26 @@ class WeComMergedDirectoryRepository {
     }
   }
 
+  Future<List<Map<String, Object?>>> _readOperations(String tableName) {
+    return _overlayDatabase.connection.query(
+      WeComOverlaySchema.operationsTable,
+      columns: ['row_key_json', 'operation', 'values_json'],
+      where: 'dataset_id = ? AND identity_corp_id = ? '
+          'AND identity_user_id = ? AND database_name = ? AND table_name = ?',
+      whereArgs: [
+        datasetId,
+        identityScope.corporationId,
+        identityScope.userId,
+        _databaseName,
+        tableName,
+      ],
+      orderBy: 'revision_id',
+    );
+  }
+
+  static String _membershipKey(int departmentId, int userId) =>
+      '$departmentId:$userId';
+
   Map<String, Object?> _decodeObject(String source, String fieldName) {
     final decoded = jsonDecode(source);
     if (decoded is! Map) {
@@ -142,6 +242,128 @@ class WeComMergedDirectoryRepository {
     }
     return Map<String, Object?>.from(decoded);
   }
+}
+
+class _DepartmentState {
+  _DepartmentState({
+    required this.id,
+    required this.name,
+    required this.parentId,
+    required this.displayOrder,
+    required this.corporationId,
+  });
+
+  factory _DepartmentState.fromDepartment(WeComDepartment department) =>
+      _DepartmentState(
+        id: department.id,
+        name: department.name,
+        parentId: department.parentId,
+        displayOrder: department.displayOrder,
+        corporationId: department.corporationId,
+      );
+
+  factory _DepartmentState.empty(int id) => _DepartmentState(
+        id: id,
+        name: '',
+        parentId: 0,
+        displayOrder: 0,
+        corporationId: 0,
+      );
+
+  final int id;
+  String name;
+  int parentId;
+  int displayOrder;
+  int corporationId;
+
+  void apply(Map<String, Object?> values) {
+    if (values.containsKey('name')) {
+      name = _ContactState._requiredString(values['name'], 'name');
+    }
+    if (values.containsKey('parent_id')) {
+      parentId = _requiredInt(values['parent_id'], 'parent_id');
+    }
+    if (values.containsKey('display_order')) {
+      displayOrder = _requiredInt(values['display_order'], 'display_order');
+    }
+    if (values.containsKey('corpany_id')) {
+      corporationId = _requiredInt(values['corpany_id'], 'corpany_id');
+    }
+  }
+
+  WeComDepartment toDepartment() => WeComDepartment(
+        id: id,
+        name: name,
+        parentId: parentId,
+        displayOrder: displayOrder,
+        corporationId: corporationId,
+      );
+}
+
+class _MembershipState {
+  _MembershipState({
+    required this.departmentId,
+    required this.userId,
+    required this.job,
+    required this.mainJobFlag,
+    required this.sortOrder,
+  });
+
+  factory _MembershipState.fromMembership(
+    WeComDepartmentMembership membership,
+  ) =>
+      _MembershipState(
+        departmentId: membership.departmentId,
+        userId: membership.userId,
+        job: membership.job,
+        mainJobFlag: membership.mainJobFlag,
+        sortOrder: membership.sortOrder,
+      );
+
+  factory _MembershipState.empty({
+    required int departmentId,
+    required int userId,
+  }) =>
+      _MembershipState(
+        departmentId: departmentId,
+        userId: userId,
+        job: '',
+        mainJobFlag: 0,
+        sortOrder: 0,
+      );
+
+  final int departmentId;
+  final int userId;
+  String job;
+  int mainJobFlag;
+  int sortOrder;
+
+  void apply(Map<String, Object?> values) {
+    if (values.containsKey('job')) {
+      job = _ContactState._requiredString(values['job'], 'job');
+    }
+    if (values.containsKey('is_main_job')) {
+      mainJobFlag = _requiredInt(values['is_main_job'], 'is_main_job');
+    }
+    if (values.containsKey('sort')) {
+      sortOrder = _requiredInt(values['sort'], 'sort');
+    }
+  }
+
+  WeComDepartmentMembership toMembership() => WeComDepartmentMembership(
+        departmentId: departmentId,
+        userId: userId,
+        job: job,
+        mainJobFlag: mainJobFlag,
+        sortOrder: sortOrder,
+      );
+}
+
+int _requiredInt(Object? value, String fieldName) {
+  if (value is! int) {
+    throw FormatException('$fieldName must be an integer');
+  }
+  return value;
 }
 
 class _ContactState {

@@ -97,6 +97,7 @@ class WeComContactRepository implements ContactRepository {
           displayName: contact.displayName,
           account: _nonEmpty(contact.account),
           organizationName: _nonEmpty(contact.externalCorporationName),
+          organizationUnitId: department?.id.toString(),
           departmentName: _nonEmpty(department?.name),
           jobTitle:
               _nonEmpty(primaryMembership?.job) ?? _nonEmpty(contact.position),

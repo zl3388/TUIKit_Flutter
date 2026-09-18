@@ -10,8 +10,10 @@ import '../data/system_attachment_opener.dart';
 import '../data/wecom_activity_repository.dart';
 import '../data/wecom_active_dataset_runtime.dart';
 import '../data/wecom_contact_repository.dart';
+import '../data/wecom_conversation_editor.dart';
 import '../data/wecom_data_source_service.dart';
 import '../data/wecom_database_package.dart';
+import '../data/wecom_directory_editor.dart';
 import '../data/wecom_incremental_merge_planner.dart';
 import '../data/wecom_incremental_migration_service.dart';
 import '../data/wecom_identity_repository.dart';
@@ -34,6 +36,8 @@ class OfflineEnvironment {
     required this.wecomDatasetResolver,
     required this.wecomDataSources,
     required this.wecomSourceDirectories,
+    this.wecomDirectoryEditor,
+    this.wecomConversationEditor,
     this.wecomRuntime,
   });
 
@@ -45,6 +49,8 @@ class OfflineEnvironment {
   final WeComActiveDatasetResolver wecomDatasetResolver;
   final WeComDataSourceManager wecomDataSources;
   final WeComSourceDirectoryAccess wecomSourceDirectories;
+  final WeComDirectoryEditor? wecomDirectoryEditor;
+  final WeComConversationEditor? wecomConversationEditor;
   final WeComActiveDatasetRuntime? wecomRuntime;
 
   bool _closed = false;
@@ -143,29 +149,44 @@ abstract final class OfflineBootstrap {
       IdentityRepository identityRepository;
       ConversationRepository conversationRepository;
       ActivityRepository activityRepository;
+      WeComDirectoryEditor? directoryEditor;
+      WeComConversationEditor? conversationEditor;
       try {
         runtime = await resolver.openActive();
+        final commands = WeComOverlayCommandService(
+          overlayDatabase: overlayDatabase,
+          contract: contract,
+          identityScope: runtime.identity.identity.scope,
+        );
         contactRepository = WeComContactRepository(
           runtime.directory,
           currentCorporationId: runtime.identity.identity.corporationId,
         );
         identityRepository = runtime.identity;
+        directoryEditor = WeComDirectoryEditor(
+          datasetId: runtime.datasetId,
+          directory: runtime.directory,
+          commands: commands,
+        );
+        final simulation = WeComLocalSimulationRepository(
+          overlayDatabase: overlayDatabase,
+          identityScope: runtime.identity.identity.scope,
+        );
+        conversationEditor = WeComConversationEditor(
+          datasetId: runtime.datasetId,
+          conversations: runtime.conversations,
+          commands: commands,
+          simulation: simulation,
+        );
         conversationRepository = WeComOfflineConversationRepository(
           datasetId: runtime.datasetId,
           currentUserId: runtime.identity.identity.userId,
           conversations: runtime.conversations,
           messages: runtime.messages,
           contacts: contactRepository,
-          commands: WeComOverlayCommandService(
-            overlayDatabase: overlayDatabase,
-            contract: contract,
-            identityScope: runtime.identity.identity.scope,
-          ),
+          commands: commands,
           media: runtime.media,
-          simulation: WeComLocalSimulationRepository(
-            overlayDatabase: overlayDatabase,
-            identityScope: runtime.identity.identity.scope,
-          ),
+          simulation: simulation,
         );
         activityRepository = WeComActivityRepository(
           currentUserId: runtime.identity.identity.userId,
@@ -201,6 +222,8 @@ abstract final class OfflineBootstrap {
         wecomDatasetResolver: resolver,
         wecomDataSources: dataSources,
         wecomSourceDirectories: sourceDirectories,
+        wecomDirectoryEditor: directoryEditor,
+        wecomConversationEditor: conversationEditor,
         wecomRuntime: runtime,
       );
     } catch (_) {

@@ -90,6 +90,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         type: _conversationType(summary.id),
         title: _conversationTitle(summary, contactsById),
         avatarPath: null,
+        titleRemark: _nonEmpty(summary.roomNameRemark),
         lastMessagePreview: useSimulatedPreview
             ? simulatedPreview.text
             : _messageContent(
