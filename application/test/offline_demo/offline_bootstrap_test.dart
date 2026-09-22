@@ -80,7 +80,7 @@ void main() {
     expect(environment.store.contactsAvailable, isTrue);
     expect(environment.store.conversationsAvailable, isTrue);
     expect(environment.store.notificationsAvailable, isFalse);
-    expect(environment.store.announcementsAvailable, isFalse);
+    expect(environment.store.announcementsAvailable, isTrue);
     expect(environment.store.callsAvailable, isTrue);
     expect(environment.wecomRuntime?.datasetId, imported.datasetId);
     expect(environment.store.contacts, hasLength(1));
@@ -100,7 +100,8 @@ void main() {
     expect(environment.store.profile?.account, 'current');
     expect(environment.store.conversations, hasLength(1));
     expect(environment.store.notifications, isEmpty);
-    expect(environment.store.announcements, isEmpty);
+    expect(environment.store.announcements, hasLength(1));
+    expect(environment.store.announcements.single.title, 'Base announcement');
     expect(environment.store.callRecords, isEmpty);
     expect(environment.store.conversations.single.title, 'Example room');
     expect(environment.store.conversations.single.unreadCount, 2);
@@ -123,6 +124,16 @@ void main() {
     final members = await environment.store.membersFor('R:example');
     expect(members, hasLength(1));
     expect(members.single.displayName, 'Overlay contact');
+
+    await environment.wecomAnnouncementEditor!.updateContent(
+      announcementId: '20',
+      title: 'Overlay announcement',
+      summary: 'Overlay summary',
+    );
+    await environment.store.refreshAnnouncements();
+    expect(
+        environment.store.announcements.single.title, 'Overlay announcement');
+    expect(environment.store.announcements.single.summary, 'Overlay summary');
 
     await environment.store.setConversationPinned('R:example', true);
     await environment.store.setConversationMuted('R:example', true);
@@ -152,6 +163,18 @@ void main() {
       1,
     );
     await sourceMessageDatabase.close();
+    final sourceAnnouncementDatabase = await databaseFactoryFfi.openDatabase(
+      imported.databaseFile('forever_store.db').path,
+      options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+    );
+    final sourceAnnouncement = await sourceAnnouncementDatabase.query(
+      'announce_table',
+      where: 'id = ?',
+      whereArgs: [20],
+    );
+    expect(sourceAnnouncement.single['subject'], 'Base announcement');
+    expect(sourceAnnouncement.single['summary'], 'Base summary');
+    await sourceAnnouncementDatabase.close();
 
     await environment.close();
     await environment.close();
@@ -164,6 +187,8 @@ void main() {
     );
     expect(reopened.store.conversations.single.isPinned, isTrue);
     expect(reopened.store.conversations.single.isMuted, isTrue);
+    expect(reopened.store.announcements.single.title, 'Overlay announcement');
+    expect(reopened.store.announcements.single.summary, 'Overlay summary');
     await reopened.close();
   });
 
@@ -238,6 +263,7 @@ Future<WeComImportedPackage> _importAndActivate({
     externalJob: 'Engineer',
   );
   await _createSessionDatabase(source);
+  await _createForeverStoreDatabase(source);
   await createMessageDatabases(
     source,
     conversationNumericId: 1,
@@ -374,6 +400,50 @@ CREATE TABLE draft_table_1 (
   await database.close();
 }
 
+Future<void> _createForeverStoreDatabase(Directory source) async {
+  final database = await databaseFactoryFfi.openDatabase(
+    p.join(source.path, 'forever_store.db'),
+    options: OpenDatabaseOptions(singleInstance: false),
+  );
+  await database.execute('''
+CREATE TABLE announce_table(
+  id INTEGER PRIMARY KEY NOT NULL,
+  time INTEGER NOT NULL,
+  subject TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  is_secret INTEGER NOT NULL,
+  attachment_count INTEGER NOT NULL,
+  sender_name TEXT NOT NULL,
+  sender_id INTEGER NOT NULL,
+  is_read INTEGER NOT NULL,
+  store_data_id INTEGER NOT NULL,
+  image_url TEXT NOT NULL,
+  url TEXT NOT NULL,
+  store_id INTEGER NOT NULL,
+  status INTEGER NOT NULL,
+  flags INTEGER NOT NULL
+)
+''');
+  await database.insert('announce_table', {
+    'id': 20,
+    'time': 1700000100,
+    'subject': 'Base announcement',
+    'summary': 'Base summary',
+    'is_secret': 2,
+    'attachment_count': 1,
+    'sender_name': 'Engineering',
+    'sender_id': 2,
+    'is_read': 1,
+    'store_data_id': 20,
+    'image_url': '',
+    'url': 'https://example.com/announcement',
+    'store_id': 20,
+    'status': 1,
+    'flags': 0,
+  });
+  await database.close();
+}
+
 WeComPackageContract _contract() {
   return WeComPackageContract(
     formatVersion: 1,
@@ -437,6 +507,35 @@ WeComPackageContract _contract() {
               primaryKeyPosition: 1,
             ),
             testColumn('content', ''),
+          ],
+        },
+        indexes: const {},
+      ),
+      WeComDatabaseContract(
+        fileName: 'forever_store.db',
+        allowEmpty: false,
+        tables: {
+          'announce_table': [
+            testColumn(
+              'id',
+              'INTEGER',
+              notNull: true,
+              primaryKeyPosition: 1,
+            ),
+            testColumn('time', 'INTEGER', notNull: true),
+            testColumn('subject', 'TEXT', notNull: true),
+            testColumn('summary', 'TEXT', notNull: true),
+            testColumn('is_secret', 'INTEGER', notNull: true),
+            testColumn('attachment_count', 'INTEGER', notNull: true),
+            testColumn('sender_name', 'TEXT', notNull: true),
+            testColumn('sender_id', 'INTEGER', notNull: true),
+            testColumn('is_read', 'INTEGER', notNull: true),
+            testColumn('store_data_id', 'INTEGER', notNull: true),
+            testColumn('image_url', 'TEXT', notNull: true),
+            testColumn('url', 'TEXT', notNull: true),
+            testColumn('store_id', 'INTEGER', notNull: true),
+            testColumn('status', 'INTEGER', notNull: true),
+            testColumn('flags', 'INTEGER', notNull: true),
           ],
         },
         indexes: const {},

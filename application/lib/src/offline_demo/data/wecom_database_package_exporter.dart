@@ -205,8 +205,12 @@ class WeComDatabasePackageExporter {
           'Overlay revision metadata is malformed',
         );
       }
+      final targetName = '$databaseName/$tableName';
+      if (WeComOverlayContractValidator.localOnlyTargets.contains(targetName)) {
+        continue;
+      }
       if (!WeComOverlayContractValidator.compatibleCopyTargets
-          .contains('$databaseName/$tableName')) {
+          .contains(targetName)) {
         throw WeComExportException(
           WeComExportIssueCode.unsupportedTarget,
           'Overlay target has not passed export certification',

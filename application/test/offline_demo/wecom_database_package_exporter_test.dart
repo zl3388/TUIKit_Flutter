@@ -274,6 +274,38 @@ void main() {
     );
   });
 
+  test('does not include local-only announcement overlays in exports',
+      () async {
+    await overlayDatabase.connection.insert(
+      WeComOverlaySchema.operationsTable,
+      {
+        'dataset_id': basePackage.datasetId,
+        'identity_corp_id': 100,
+        'identity_user_id': 1,
+        'database_name': 'forever_store.db',
+        'table_name': 'announce_table',
+        'row_key_json': '{"id":10}',
+        'operation': 'upsert',
+        'values_json': '{"subject":"Local only","summary":"Summary"}',
+        'created_at_micros': DateTime.now().toUtc().microsecondsSinceEpoch,
+      },
+    );
+
+    final exported = await exporter.export(
+      basePackage: basePackage,
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
+      destinationDirectory: destinationDirectory,
+    );
+
+    expect(exported.appliedRevisionCount, 0);
+    expect(exported.lastAppliedRevisionId, isNull);
+    expect(exported.datasetId, basePackage.datasetId);
+  });
+
   test('constraint failures leave the base and destination unchanged',
       () async {
     final baseBefore = await _snapshotPackage(basePackage);

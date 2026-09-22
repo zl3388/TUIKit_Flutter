@@ -13,6 +13,9 @@ class WorkbenchPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = environment.store;
+    final announcementEditor = environment.adminAccess.isAdmin
+        ? environment.wecomAnnouncementEditor
+        : null;
     final tools = <_WorkbenchTool>[
       _WorkbenchTool(
         label: '通知中心',
@@ -31,7 +34,10 @@ class WorkbenchPage extends StatelessWidget {
         color: OfflineTheme.secondary,
         open: () => Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (context) => AnnouncementsPage(store: store),
+            builder: (context) => AnnouncementsPage(
+              store: store,
+              editor: announcementEditor,
+            ),
           ),
         ),
       ),
@@ -121,16 +127,21 @@ class WorkbenchPage extends StatelessWidget {
                                         builder: (context) =>
                                             AnnouncementDetailPage(
                                           announcement: announcement,
+                                          editor: announcementEditor,
+                                          onChanged: () async {
+                                            await store.refreshAnnouncements();
+                                            return store.announcements
+                                                .firstWhere(
+                                              (item) =>
+                                                  item.id == announcement.id,
+                                            );
+                                          },
                                         ),
                                       ),
                                     ),
-                                    leading: Icon(
-                                      announcement.isPinned
-                                          ? Icons.push_pin_rounded
-                                          : Icons.article_outlined,
-                                      color: announcement.isPinned
-                                          ? OfflineTheme.accent
-                                          : OfflineTheme.secondary,
+                                    leading: const Icon(
+                                      Icons.article_outlined,
+                                      color: OfflineTheme.secondary,
                                     ),
                                     title: Text(
                                       announcement.title,

@@ -298,30 +298,30 @@ class OfflineAnnouncement {
   const OfflineAnnouncement({
     required this.id,
     required this.title,
-    required this.body,
+    required this.summary,
     required this.authorName,
     required this.publishedAt,
-    required this.isPinned,
-    required this.status,
+    required this.attachmentCount,
+    required this.isRead,
   });
 
   final String id;
   final String title;
-  final String body;
+  final String summary;
   final String authorName;
   final DateTime publishedAt;
-  final bool isPinned;
-  final String status;
+  final int attachmentCount;
+  final bool isRead;
 
   factory OfflineAnnouncement.fromRow(Map<String, Object?> row) =>
       OfflineAnnouncement(
         id: row['id']! as String,
         title: row['title']! as String,
-        body: row['body']! as String,
+        summary: row['body']! as String,
         authorName: row['author_name']! as String,
         publishedAt: DateTime.parse(row['published_at']! as String),
-        isPinned: row['is_pinned'] == 1,
-        status: row['status']! as String,
+        attachmentCount: row['attachment_count'] as int? ?? 0,
+        isRead: row['is_read'] == 1,
       );
 }
 

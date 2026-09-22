@@ -20,6 +20,15 @@ class WeComOverlayContractValidator {
     'session.db/conversation_user_table',
   };
 
+  static const localOnlyTargets = <String>{
+    'forever_store.db/announce_table',
+  };
+
+  static const incrementalMergeTargets = <String>{
+    ...compatibleCopyTargets,
+    ...localOnlyTargets,
+  };
+
   static const _ftsShadowSuffixes = <String>[
     'config',
     'content',

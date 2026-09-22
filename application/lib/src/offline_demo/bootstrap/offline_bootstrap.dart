@@ -9,6 +9,7 @@ import '../data/local_media_store.dart';
 import '../data/system_attachment_opener.dart';
 import '../data/wecom_activity_repository.dart';
 import '../data/wecom_active_dataset_runtime.dart';
+import '../data/wecom_announcement_editor.dart';
 import '../data/wecom_contact_repository.dart';
 import '../data/wecom_conversation_editor.dart';
 import '../data/wecom_data_source_service.dart';
@@ -38,6 +39,7 @@ class OfflineEnvironment {
     required this.wecomSourceDirectories,
     this.wecomDirectoryEditor,
     this.wecomConversationEditor,
+    this.wecomAnnouncementEditor,
     this.wecomRuntime,
   });
 
@@ -51,6 +53,7 @@ class OfflineEnvironment {
   final WeComSourceDirectoryAccess wecomSourceDirectories;
   final WeComDirectoryEditor? wecomDirectoryEditor;
   final WeComConversationEditor? wecomConversationEditor;
+  final WeComAnnouncementEditor? wecomAnnouncementEditor;
   final WeComActiveDatasetRuntime? wecomRuntime;
 
   bool _closed = false;
@@ -151,6 +154,7 @@ abstract final class OfflineBootstrap {
       ActivityRepository activityRepository;
       WeComDirectoryEditor? directoryEditor;
       WeComConversationEditor? conversationEditor;
+      WeComAnnouncementEditor? announcementEditor;
       try {
         runtime = await resolver.openActive();
         final commands = WeComOverlayCommandService(
@@ -178,6 +182,14 @@ abstract final class OfflineBootstrap {
           commands: commands,
           simulation: simulation,
         );
+        final announcements = runtime.announcements;
+        if (announcements != null) {
+          announcementEditor = WeComAnnouncementEditor(
+            datasetId: runtime.datasetId,
+            announcements: announcements,
+            commands: commands,
+          );
+        }
         conversationRepository = WeComOfflineConversationRepository(
           datasetId: runtime.datasetId,
           currentUserId: runtime.identity.identity.userId,
@@ -192,6 +204,7 @@ abstract final class OfflineBootstrap {
           currentUserId: runtime.identity.identity.userId,
           messages: runtime.messages,
           contacts: contactRepository,
+          announcements: announcements,
         );
       } on WeComActiveDatasetException catch (error) {
         if (error.code != WeComActiveDatasetIssueCode.noActiveDataset &&
@@ -224,6 +237,7 @@ abstract final class OfflineBootstrap {
         wecomSourceDirectories: sourceDirectories,
         wecomDirectoryEditor: directoryEditor,
         wecomConversationEditor: conversationEditor,
+        wecomAnnouncementEditor: announcementEditor,
         wecomRuntime: runtime,
       );
     } catch (_) {

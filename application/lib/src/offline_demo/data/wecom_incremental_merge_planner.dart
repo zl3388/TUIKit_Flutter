@@ -293,7 +293,7 @@ class WeComIncrementalMergePlanner {
         'Overlay revision metadata is malformed',
       );
     }
-    if (!WeComOverlayContractValidator.compatibleCopyTargets
+    if (!WeComOverlayContractValidator.incrementalMergeTargets
         .contains('$databaseName/$tableName')) {
       throw WeComIncrementalMergeException(
         WeComIncrementalMergeIssueCode.unsupportedTarget,

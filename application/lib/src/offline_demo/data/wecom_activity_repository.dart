@@ -2,6 +2,7 @@ import '../domain/models.dart';
 import '../domain/repositories.dart';
 import '../domain/wecom_message_models.dart';
 import 'wecom_advanced_message_codec.dart';
+import 'wecom_announcement_repository.dart';
 import 'wecom_message_repository.dart';
 
 class WeComActivityRepository implements ActivityRepository {
@@ -9,22 +10,30 @@ class WeComActivityRepository implements ActivityRepository {
     required int currentUserId,
     required WeComMessageRepository messages,
     required ContactRepository contacts,
+    WeComAnnouncementRepository? announcements,
   })  : _currentUserId = currentUserId,
         _messages = messages,
-        _contacts = contacts;
+        _contacts = contacts,
+        _announcements = announcements;
 
   final int _currentUserId;
   final WeComMessageRepository _messages;
   final ContactRepository _contacts;
+  final WeComAnnouncementRepository? _announcements;
 
   @override
-  Set<ActivityFeature> get features => const {ActivityFeature.calls};
+  Set<ActivityFeature> get features => {
+        if (_announcements != null) ActivityFeature.announcements,
+        ActivityFeature.calls,
+      };
 
   @override
   Future<List<OfflineNotification>> listNotifications() async => const [];
 
   @override
-  Future<List<OfflineAnnouncement>> listAnnouncements() async => const [];
+  Future<List<OfflineAnnouncement>> listAnnouncements() async {
+    return _announcements?.listAnnouncements() ?? const [];
+  }
 
   @override
   Future<List<OfflineCallRecord>> listCallRecords() async {

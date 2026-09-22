@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:sqflite/sqflite.dart';
 
+import 'wecom_announcement_repository.dart';
 import 'wecom_conversation_repository.dart';
 import 'wecom_database_package.dart';
 import 'wecom_directory_repository.dart';
@@ -45,6 +46,7 @@ class WeComActiveDatasetRuntime {
     required this.messages,
     required this.identity,
     required this.media,
+    required this.announcements,
     required List<Database> connections,
   }) : _connections = connections;
 
@@ -54,6 +56,7 @@ class WeComActiveDatasetRuntime {
   final WeComMessageRepository messages;
   final WeComCurrentIdentityRepository identity;
   final WeComMediaRepository? media;
+  final WeComAnnouncementRepository? announcements;
   final List<Database> _connections;
 
   bool _closed = false;
@@ -245,6 +248,7 @@ class WeComActiveDatasetResolver {
     Database? messageLookupDatabase;
     Database? fileDatabase;
     Database? cacheMappingDatabase;
+    Database? foreverStoreDatabase;
     try {
       final corporationId = activation.corporationId;
       final userId = activation.userId;
@@ -300,6 +304,19 @@ class WeComActiveDatasetResolver {
           mediaRoot: mediaSnapshot.mediaRoot,
         );
       }
+      WeComAnnouncementRepository? announcements;
+      if (package.files.containsKey('forever_store.db')) {
+        foreverStoreDatabase = await package.openReadOnly(
+          'forever_store.db',
+          factory: _databaseFactory,
+        );
+        announcements = WeComAnnouncementRepository(
+          datasetId: package.datasetId,
+          identityScope: identity.scope,
+          baseDatabase: foreverStoreDatabase,
+          overlayDatabase: _overlayDatabase,
+        );
+      }
       final current = await _readLatestActivation(
         _overlayDatabase.connection,
       );
@@ -334,6 +351,7 @@ class WeComActiveDatasetResolver {
         ),
         identity: WeComCurrentIdentityRepository(userDatabase, identity),
         media: media,
+        announcements: announcements,
         connections: [
           userDatabase,
           sessionDatabase,
@@ -341,9 +359,11 @@ class WeComActiveDatasetResolver {
           messageLookupDatabase,
           if (fileDatabase != null) fileDatabase,
           if (cacheMappingDatabase != null) cacheMappingDatabase,
+          if (foreverStoreDatabase != null) foreverStoreDatabase,
         ],
       );
     } catch (_) {
+      await _closeQuietly(foreverStoreDatabase);
       await _closeQuietly(cacheMappingDatabase);
       await _closeQuietly(fileDatabase);
       await _closeQuietly(messageLookupDatabase);

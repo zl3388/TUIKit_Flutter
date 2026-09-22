@@ -426,6 +426,43 @@ void main() {
     );
   });
 
+  test('carries local-only announcement overlays to a new snapshot', () async {
+    final packages = await _importPair(
+      temporaryDirectory,
+      importer,
+      oldRows: [_user(1, name: 'Alice')],
+      newRows: [_user(1, name: 'Alice', account: 'remote')],
+    );
+    final commands = _commands(overlayDatabase, contract);
+    await commands.upsert(
+      datasetId: packages.oldPackage.datasetId,
+      databaseName: 'forever_store.db',
+      tableName: 'announce_table',
+      rowKey: const {'id': 10},
+      values: const {'subject': 'Local title', 'summary': 'Local summary'},
+    );
+
+    final plan = await planner.plan(
+      oldBasePackage: packages.oldPackage,
+      newBasePackage: packages.newPackage,
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(
+        corporationId: 100,
+        userId: 1,
+      ),
+    );
+
+    expect(plan.conflicts, isEmpty);
+    expect(plan.operations, hasLength(1));
+    expect(plan.operations.single.databaseName, 'forever_store.db');
+    expect(plan.operations.single.tableName, 'announce_table');
+    expect(plan.operations.single.rowKey, const {'id': 10});
+    expect(
+      plan.operations.single.values,
+      const {'subject': 'Local title', 'summary': 'Local summary'},
+    );
+  });
+
   test('ignores revisions owned by another identity', () async {
     final packages = await _importPair(
       temporaryDirectory,
@@ -532,6 +569,24 @@ Future<void> _createSource(
     await database.insert('user_table', row);
   }
   await database.close();
+
+  final foreverStore = await databaseFactoryFfi.openDatabase(
+    p.join(source.path, 'forever_store.db'),
+    options: OpenDatabaseOptions(singleInstance: false),
+  );
+  await foreverStore.execute(
+    'CREATE TABLE announce_table ('
+    'id INTEGER NOT NULL PRIMARY KEY, '
+    "subject TEXT NOT NULL DEFAULT '', "
+    "summary TEXT NOT NULL DEFAULT ''"
+    ')',
+  );
+  await foreverStore.insert('announce_table', {
+    'id': 10,
+    'subject': 'Base title',
+    'summary': 'Base summary',
+  });
+  await foreverStore.close();
 }
 
 Map<String, Object?> _user(
@@ -562,6 +617,18 @@ WeComPackageContract _contract() {
             _column('account', 'TEXT', notNull: true),
             _column('external_corp_name', 'TEXT', notNull: true),
             _column('external_job', 'TEXT', notNull: true),
+          ],
+        },
+        indexes: const {},
+      ),
+      WeComDatabaseContract(
+        fileName: 'forever_store.db',
+        allowEmpty: false,
+        tables: {
+          'announce_table': [
+            _column('id', 'INTEGER', notNull: true, primaryKeyPosition: 1),
+            _column('subject', 'TEXT', notNull: true),
+            _column('summary', 'TEXT', notNull: true),
           ],
         },
         indexes: const {},
