@@ -132,9 +132,22 @@ void main() {
         expect(find.text('管理'), findsWidgets);
         await tester.tap(find.text('管理').last);
         await tester.pumpAndSettle();
+        expect(find.text('概览'), findsOneWidget);
+        expect(find.text('1 人'), findsOneWidget);
+        expect(find.text('1 个会话'), findsOneWidget);
+        expect(
+          find.byKey(const Key('open-conversation-batch-manager')),
+          findsOneWidget,
+        );
         expect(find.text('未选择数据源'), findsOneWidget);
+        await tester.scrollUntilVisible(
+          find.byKey(const Key('exit-admin-mode')),
+          300,
+          scrollable: find.byType(Scrollable).last,
+        );
+        await tester.ensureVisible(find.byKey(const Key('exit-admin-mode')));
+        await tester.pumpAndSettle();
         expect(find.text('退出管理模式'), findsOneWidget);
-
         await tester.tap(find.byKey(const Key('exit-admin-mode')));
         await tester.pumpAndSettle();
         expect(find.text('管理'), findsNothing);

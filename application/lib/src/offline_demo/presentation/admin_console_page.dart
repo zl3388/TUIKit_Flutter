@@ -7,6 +7,8 @@ import '../bootstrap/offline_bootstrap.dart';
 import '../data/wecom_data_source_service.dart';
 import '../data/wecom_database_package.dart';
 import '../data/wecom_identity_repository.dart';
+import '../data/wecom_overlay_schema.dart';
+import 'admin_conversation_batch_page.dart';
 import 'offline_theme.dart';
 
 class AdminConsolePage extends StatefulWidget {
@@ -26,6 +28,7 @@ class AdminConsolePage extends StatefulWidget {
 class _AdminConsolePageState extends State<AdminConsolePage> {
   WeComSavedDataSource? _savedSource;
   var _hasDefaultKey = false;
+  var _overlayRevisionCount = 0;
   var _loadingState = true;
   var _processing = false;
 
@@ -40,6 +43,7 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
       final results = await Future.wait<Object?>([
         widget.environment.wecomDataSources.loadSelectedSource(),
         widget.environment.wecomDataSources.hasDefaultRawKey(),
+        _readOverlayRevisionCount(),
       ]);
       if (!mounted) {
         return;
@@ -47,6 +51,7 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
       setState(() {
         _savedSource = results[0] as WeComSavedDataSource?;
         _hasDefaultKey = results[1]! as bool;
+        _overlayRevisionCount = results[2]! as int;
         _loadingState = false;
       });
     } catch (error) {
@@ -60,10 +65,112 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
 
   @override
   Widget build(BuildContext context) {
-    final datasetId = widget.environment.wecomRuntime?.datasetId;
+    final environment = widget.environment;
+    final runtime = environment.wecomRuntime;
+    final datasetId = runtime?.datasetId;
+    final store = environment.store;
+    final packageSize = runtime?.package.files.values.fold<int>(
+          0,
+          (total, file) => total + file.sizeBytes,
+        ) ??
+        0;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Text(
+          '概览',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const gap = 10.0;
+            final columns = constraints.maxWidth >= 760 ? 4 : 2;
+            final width =
+                (constraints.maxWidth - gap * (columns - 1)) / columns;
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                SizedBox(
+                  width: width,
+                  child: _OverviewMetric(
+                    icon: Icons.badge_outlined,
+                    label: '当前身份',
+                    value: store.profile?.displayName ?? '未选择',
+                    detail: store.profile?.corporationName ?? '无活动企业',
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _OverviewMetric(
+                    icon: Icons.groups_outlined,
+                    label: '通讯录',
+                    value: '${store.contacts.length} 人',
+                    detail: '${store.organizationUnits.length} 个部门',
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _OverviewMetric(
+                    icon: Icons.forum_outlined,
+                    label: '内容',
+                    value: '${store.conversations.length} 个会话',
+                    detail: '${store.announcements.length} 条公告',
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _OverviewMetric(
+                    icon: Icons.storage_outlined,
+                    label: '数据库包',
+                    value: '${runtime?.package.files.length ?? 0} 个库',
+                    detail: _formatBytes(packageSize),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 10),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.layers_outlined),
+            title: const Text('本地修订'),
+            subtitle: const Text('仅统计当前数据集与当前企业身份'),
+            trailing: Text(
+              '$_overlayRevisionCount',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        Text(
+          '批量管理',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+        const SizedBox(height: 10),
+        Card(
+          child: ListTile(
+            key: const Key('open-conversation-batch-manager'),
+            enabled:
+                !_processing && environment.wecomConversationEditor != null,
+            onTap: _processing || environment.wecomConversationEditor == null
+                ? null
+                : _openConversationBatchManager,
+            leading: const Icon(Icons.checklist_rounded),
+            title: const Text('会话批量管理'),
+            subtitle: const Text('筛选会话并批量设置置顶或免打扰'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+          ),
+        ),
+        const SizedBox(height: 24),
         Text(
           '数据源',
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -171,6 +278,46 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
         ),
       ],
     );
+  }
+
+  Future<int> _readOverlayRevisionCount() async {
+    final runtime = widget.environment.wecomRuntime;
+    if (runtime == null) {
+      return 0;
+    }
+    final identity = runtime.identity.identity;
+    final rows =
+        await widget.environment.wecomOverlayDatabase.connection.rawQuery(
+      'SELECT COUNT(*) AS operation_count '
+      'FROM ${WeComOverlaySchema.operationsTable} '
+      'WHERE dataset_id = ? AND identity_corp_id = ? '
+      'AND identity_user_id = ?',
+      [runtime.datasetId, identity.corporationId, identity.userId],
+    );
+    final count = rows.single['operation_count'];
+    if (count is! int) {
+      throw const FormatException('Overlay operation count is invalid');
+    }
+    return count;
+  }
+
+  Future<void> _openConversationBatchManager() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => AdminConversationBatchPage(
+          store: widget.environment.store,
+          editor: widget.environment.wecomConversationEditor!,
+          adminAccess: widget.environment.adminAccess,
+        ),
+      ),
+    );
+    if (!mounted) {
+      return;
+    }
+    final count = await _readOverlayRevisionCount();
+    if (mounted) {
+      setState(() => _overlayRevisionCount = count);
+    }
   }
 
   Future<void> _selectSource() async {
@@ -468,4 +615,73 @@ class _ImportOptions {
 
   final String? rawKeyHex;
   final bool rememberKey;
+}
+
+class _OverviewMetric extends StatelessWidget {
+  const _OverviewMetric({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.detail,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(icon, color: OfflineTheme.secondary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  Text(
+                    detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _formatBytes(int bytes) {
+  if (bytes < 1024) {
+    return '$bytes B';
+  }
+  final kibibytes = bytes / 1024;
+  if (kibibytes < 1024) {
+    return '${kibibytes.toStringAsFixed(1)} KiB';
+  }
+  final mebibytes = kibibytes / 1024;
+  if (mebibytes < 1024) {
+    return '${mebibytes.toStringAsFixed(1)} MiB';
+  }
+  return '${(mebibytes / 1024).toStringAsFixed(1)} GiB';
 }
