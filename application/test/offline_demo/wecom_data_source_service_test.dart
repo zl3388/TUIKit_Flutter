@@ -9,6 +9,7 @@ import 'package:application/src/offline_demo/data/wecom_incremental_migration_se
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
+import 'package:application/src/offline_demo/data/wecom_scene_service.dart';
 import 'package:application/src/offline_demo/data/wecom_source_directory_access.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -77,6 +78,97 @@ void main() {
   tearDown(() async {
     await overlay.close();
     await root.delete(recursive: true);
+  });
+
+  WeComDataSourceService managerFor(String sceneId) {
+    final selectedOverlay = overlay.forScene(sceneId);
+    return WeComDataSourceService(
+      destinationRoot: destination,
+      packageImporter: importer,
+      datasetResolver: WeComActiveDatasetResolver(
+        destinationRoot: destination,
+        packageImporter: importer,
+        databaseFactory: databaseFactoryFfi,
+        overlayDatabase: selectedOverlay,
+      ),
+      migrationService: WeComIncrementalMigrationService(
+        overlayDatabase: selectedOverlay,
+        planner: WeComIncrementalMergePlanner(
+            contract: contract, databaseFactory: databaseFactoryFfi),
+        identityResolver: WeComIdentityResolver(databaseFactoryFfi),
+      ),
+      overlayDatabase: selectedOverlay,
+      defaultKeyStore: keyStore,
+      selectionStore: FileWeComSourceSelectionStore(
+          File(p.join(destination.path, 'data_source.json'))),
+    );
+  }
+
+  WeComSceneService scenesFor(String id, String datasetId) => WeComSceneService(
+        overlayDatabase: overlay.forScene(id),
+        datasetResolver: datasetResolver,
+        identityScope: const WeComIdentityScope(corporationId: 100, userId: 1),
+        datasetId: datasetId,
+        canEdit: () => true,
+      );
+
+  test('source refresh advances one scene and rejects a stale source manager',
+      () async {
+    final first = await service
+        .prepare(await _createAccount(root, 'first', name: 'First'));
+    await service.activate(first);
+    final scenes = scenesFor('default', first.package.datasetId);
+    await scenes.ensureDefaultScene();
+    final copy = await scenes.create('Copy', copyFromSceneId: 'default');
+    final after = await service
+        .prepare(await _createAccount(root, 'after', name: 'After'));
+    await expectLater(
+        service.activate(after),
+        throwsA(isA<WeComDataSourceException>().having((error) => error.code,
+            'code', WeComDataSourceIssueCode.activeDatasetChanged)));
+    final manager = managerFor(copy.id);
+    final refreshed = await manager.activate(after);
+    expect(refreshed.status, WeComDataSourceActivationStatus.migrated);
+    final list = await scenes.list();
+    expect(list.singleWhere((item) => item.id == 'default').datasetId,
+        first.package.datasetId);
+    expect(list.singleWhere((item) => item.id == copy.id).datasetId,
+        after.package.datasetId);
+    await scenesFor(copy.id, after.package.datasetId).switchScene('default');
+    expect(await managerFor('default').loadSelectedSource(), isNull);
+    await expectLater(
+        managerFor('default').prepareSaved(),
+        throwsA(isA<WeComDataSourceException>().having((error) => error.code,
+            'code', WeComDataSourceIssueCode.savedSourceUnavailable)));
+  });
+
+  test('returning to an identity recalls its last editable scene', () async {
+    final first = await service
+        .prepare(await _createAccount(root, 'first', name: 'First'));
+    await service.activate(first);
+    final scenes = scenesFor('default', first.package.datasetId);
+    await scenes.ensureDefaultScene();
+    final remembered = await scenes.create('Remembered');
+    final second =
+        await _createAccount(root, 'second', name: 'Other', writeConfig: false);
+    await addIdentityCandidate(Directory(p.join(second.path, 'Data')),
+        corporationId: 200, userId: 2, name: 'Second');
+    final other = await service.prepare(second);
+    await managerFor(remembered.id).activate(other, selectedCorporationId: 200);
+    final active = (await overlay.connection.query(
+            WeComOverlaySchema.datasetActivationsTable,
+            orderBy: 'activation_id DESC',
+            limit: 1))
+        .single;
+    expect(active['scene_id'], 'default');
+    await managerFor('default').activate(first);
+    final back = (await overlay.connection.query(
+            WeComOverlaySchema.datasetActivationsTable,
+            orderBy: 'activation_id DESC',
+            limit: 1))
+        .single;
+    expect(back['scene_id'], remembered.id);
+    expect(back['current_user_id'], 1);
   });
 
   test('accepts an account root or its Data directory and activates once',

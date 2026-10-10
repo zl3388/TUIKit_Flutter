@@ -4,6 +4,7 @@ import 'package:application/src/offline_demo/data/wecom_database_package.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package_exporter.dart';
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_message_overlay_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
@@ -251,6 +252,10 @@ void main() {
       peerProfileId: '2',
       text: 'local only',
     );
+    await simulation.scheduleCall(
+      peerProfileId: '2',
+      scheduledAt: DateTime.utc(2026, 9, 15, 9),
+    );
 
     final exported = await exporter.export(
       basePackage: basePackage,
@@ -272,6 +277,52 @@ void main() {
         ..sort(),
       ['session.db', 'user.db'],
     );
+  });
+
+  test('does not include local message edits in compatible exports',
+      () async {
+    final baseBefore = await _snapshotPackage(basePackage);
+    final messages = WeComMessageOverlayRepository(
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(corporationId: 100, userId: 1),
+    );
+    await messages.append(
+      conversationId: 'conv-a',
+      targetKey: 'overlay:local-1',
+      action: 'add',
+      state: WeComMessageOverlayState.text(
+        senderId: '2',
+        text: 'local message',
+        sentAt: DateTime.utc(2026, 9, 15),
+      ),
+    );
+    await messages.append(
+      conversationId: 'conv-a',
+      targetKey: 'base:1:fingerprint',
+      action: 'replace',
+      state: WeComMessageOverlayState.text(
+        senderId: '1',
+        text: 'local replacement',
+      ),
+    );
+    await messages.append(
+      conversationId: 'conv-a',
+      targetKey: 'base:2:fingerprint',
+      action: 'hide',
+      state: const WeComMessageOverlayState.hidden(),
+    );
+
+    final exported = await exporter.export(
+      basePackage: basePackage,
+      overlayDatabase: overlayDatabase,
+      identityScope: const WeComIdentityScope(corporationId: 100, userId: 1),
+      destinationDirectory: destinationDirectory,
+    );
+
+    expect(exported.appliedRevisionCount, 0);
+    expect(exported.lastAppliedRevisionId, isNull);
+    expect(exported.datasetId, basePackage.datasetId);
+    expect(await _snapshotPackage(basePackage), baseBefore);
   });
 
   test('does not include local-only announcement overlays in exports',

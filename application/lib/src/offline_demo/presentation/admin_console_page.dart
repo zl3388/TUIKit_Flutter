@@ -9,6 +9,8 @@ import '../data/wecom_database_package.dart';
 import '../data/wecom_identity_repository.dart';
 import '../data/wecom_overlay_schema.dart';
 import 'admin_conversation_batch_page.dart';
+import 'admin_scheduled_calls_page.dart';
+import 'admin_scenes_page.dart';
 import 'offline_theme.dart';
 
 class AdminConsolePage extends StatefulWidget {
@@ -139,7 +141,7 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
           child: ListTile(
             leading: const Icon(Icons.layers_outlined),
             title: const Text('本地修订'),
-            subtitle: const Text('仅统计当前数据集与当前企业身份'),
+            subtitle: const Text('当前场景的字段修订'),
             trailing: Text(
               '$_overlayRevisionCount',
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -170,6 +172,26 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
             trailing: const Icon(Icons.chevron_right_rounded),
           ),
         ),
+        Card(
+          child: ListTile(
+            key: const Key('open-scheduled-calls'),
+            enabled: !_processing && environment.wecomSimulation != null,
+            onTap: _processing || environment.wecomSimulation == null
+                ? null
+                : () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (context) => AdminScheduledCallsPage(
+                          store: store,
+                          simulation: environment.wecomSimulation!,
+                          adminAccess: environment.adminAccess,
+                        ),
+                      ),
+                    ),
+            leading: const Icon(Icons.call_outlined),
+            title: const Text('预约来电'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+          ),
+        ),
         const SizedBox(height: 24),
         Text(
           '数据源',
@@ -178,6 +200,22 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
               ),
         ),
         const SizedBox(height: 10),
+        ListTile(
+          key: const Key('open-scene-manager'),
+          leading: const Icon(Icons.layers_outlined),
+          title: const Text('场景与快照'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          enabled: !_processing && environment.wecomScenes != null,
+          onTap: _processing || environment.wecomScenes == null
+              ? null
+              : () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => AdminScenesPage(
+                              scenes: environment.wecomScenes!,
+                              onEnvironmentReload: widget.onEnvironmentReload,
+                            )),
+                  ),
+        ),
         Card(
           child: Column(
             children: [
@@ -291,8 +329,13 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
       'SELECT COUNT(*) AS operation_count '
       'FROM ${WeComOverlaySchema.operationsTable} '
       'WHERE dataset_id = ? AND identity_corp_id = ? '
-      'AND identity_user_id = ?',
-      [runtime.datasetId, identity.corporationId, identity.userId],
+      'AND identity_user_id = ? AND scene_id = ?',
+      [
+        runtime.datasetId,
+        identity.corporationId,
+        identity.userId,
+        widget.environment.wecomOverlayDatabase.sceneId
+      ],
     );
     final count = rows.single['operation_count'];
     if (count is! int) {

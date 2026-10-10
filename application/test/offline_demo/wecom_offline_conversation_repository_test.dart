@@ -8,6 +8,8 @@ import 'package:application/src/offline_demo/data/wecom_identity_repository.dart
 import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_merged_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_media_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_message_editor.dart';
+import 'package:application/src/offline_demo/data/wecom_message_overlay_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_message_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_offline_conversation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_command_service.dart';
@@ -33,6 +35,8 @@ void main() {
   late WeComPackageContract contract;
   late WeComMergedConversationRepository mergedConversations;
   late WeComOverlayCommandService commands;
+  late WeComMessageRepository messageRepository;
+  late WeComMessageOverlayRepository messageOverlay;
   late WeComOfflineConversationRepository repository;
 
   setUpAll(sqfliteFfiInit);
@@ -215,16 +219,22 @@ void main() {
       contract: contract,
       identityScope: identityScope,
     );
+    messageRepository = WeComMessageRepository(
+      messageDatabase: messageDatabase,
+      lookupDatabase: lookupDatabase,
+    );
+    messageOverlay = WeComMessageOverlayRepository(
+      overlayDatabase: overlayDatabase,
+      identityScope: identityScope,
+    );
     repository = WeComOfflineConversationRepository(
       datasetId: datasetId,
       currentUserId: 1,
       conversations: mergedConversations,
-      messages: WeComMessageRepository(
-        messageDatabase: messageDatabase,
-        lookupDatabase: lookupDatabase,
-      ),
+      messages: messageRepository,
       contacts: const _FixtureContacts(),
       commands: commands,
+      messageOverlay: messageOverlay,
     );
   });
 
@@ -311,6 +321,228 @@ void main() {
       ),
       throwsA(isA<UnsupportedError>()),
     );
+  });
+
+  test('adds as any group member and locally changes or hides base messages',
+      () async {
+    var isAdmin = true;
+    final editor = WeComMessageEditor(
+      conversations: repository,
+      contacts: const _FixtureContacts(),
+      messages: messageRepository,
+      overlay: messageOverlay,
+      canEdit: () => isAdmin,
+    );
+    expect(
+      (await editor.sendersFor('R:room')).map((sender) => sender.id),
+      ['1', '2'],
+    );
+    final added = await editor.add(
+      conversationId: 'R:room',
+      senderId: '2',
+      text: '来自群成员',
+    );
+    var groupMessages = await repository.listMessages('R:room');
+    expect(groupMessages.single.senderProfileId, '2');
+    expect(groupMessages.single.text, '来自群成员');
+    expect(
+      (await repository.listConversations())
+          .singleWhere((item) => item.id == 'R:room')
+          .lastMessagePreview,
+      '来自群成员',
+    );
+    final addedId = groupMessages.single.id;
+    expect(addedId, startsWith('overlay:'));
+
+    final replaced = await editor.replace(
+      conversationId: 'R:room',
+      messageId: addedId,
+      senderId: '1',
+      text: '本地覆盖',
+    );
+    groupMessages = await repository.listMessages('R:room');
+    expect(groupMessages.single.senderProfileId, '1');
+    expect(groupMessages.single.text, '本地覆盖');
+
+    final hidden = await editor.hide(
+      conversationId: 'R:room',
+      messageId: addedId,
+    );
+    expect(await repository.listMessages('R:room'), isEmpty);
+    await editor.undo(hidden);
+    expect((await repository.listMessages('R:room')).single.text, '本地覆盖');
+    await editor.undo(replaced);
+    expect((await repository.listMessages('R:room')).single.text, '来自群成员');
+    await editor.undo(added);
+    expect(await repository.listMessages('R:room'), isEmpty);
+
+    final originalText = (await repository.listMessages('S:1_2')).first.text;
+    final edit = await editor.replace(
+      conversationId: 'S:1_2',
+      messageId: '1',
+      senderId: '1',
+      text: '以本人身份覆盖对方消息',
+    );
+    var singleMessages = await repository.listMessages('S:1_2');
+    expect(singleMessages.first.text, '以本人身份覆盖对方消息');
+    expect(singleMessages.first.senderProfileId, '1');
+    expect(
+        (await repository.listConversations())
+            .singleWhere((item) => item.id == 'S:1_2')
+            .lastMessagePreview,
+        '[通话] 对方已取消');
+    await editor.undo(edit);
+    singleMessages = await repository.listMessages('S:1_2');
+    expect(singleMessages.first.text, originalText);
+
+    final hiddenLast = await editor.hide(
+      conversationId: 'S:1_2',
+      messageId: '3',
+    );
+    expect(
+      (await repository.listConversations())
+          .singleWhere((item) => item.id == 'S:1_2')
+          .lastMessagePreview,
+      '好的',
+    );
+    await editor.undo(hiddenLast);
+
+    isAdmin = false;
+    await expectLater(
+      editor.add(conversationId: 'R:room', senderId: '2', text: 'blocked'),
+      throwsStateError,
+    );
+
+    var checks = 0;
+    final expiringEditor = WeComMessageEditor(
+      conversations: repository,
+      contacts: const _FixtureContacts(),
+      messages: messageRepository,
+      overlay: messageOverlay,
+      canEdit: () => checks++ < 2,
+    );
+    final editsBefore = (await overlayDatabase.connection.rawQuery(
+      'SELECT COUNT(*) AS edit_count FROM overlay_message_edits',
+    ))
+        .single['edit_count'];
+    await expectLater(
+      expiringEditor.add(
+        conversationId: 'R:room',
+        senderId: '2',
+        text: 'expired while loading',
+      ),
+      throwsStateError,
+    );
+    expect(
+      (await overlayDatabase.connection.rawQuery(
+        'SELECT COUNT(*) AS edit_count FROM overlay_message_edits',
+      ))
+          .single['edit_count'],
+      editsBefore,
+    );
+  });
+
+  test('message overlay survives reopen, follows identity and preserves base',
+      () async {
+    final before = await messageDatabase.rawQuery(
+      'SELECT content FROM message_table WHERE message_id = 1',
+    );
+    final editor = WeComMessageEditor(
+      conversations: repository,
+      contacts: const _FixtureContacts(),
+      messages: messageRepository,
+      overlay: messageOverlay,
+      canEdit: () => true,
+    );
+    await editor.replace(
+      conversationId: 'S:1_2',
+      messageId: '1',
+      senderId: '1',
+      text: 'same identity',
+    );
+    await overlayDatabase.close();
+    overlayDatabase = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: p.join(temporaryDirectory.path, 'overlay.db'),
+    );
+    final sameIdentity = WeComOfflineConversationRepository(
+      datasetId: 'another-source-snapshot',
+      currentUserId: 1,
+      conversations: WeComMergedConversationRepository(
+        datasetId: 'another-source-snapshot',
+        identityScope: identityScope,
+        baseRepository: WeComConversationRepository(baseDatabase),
+        overlayDatabase: overlayDatabase,
+      ),
+      messages: messageRepository,
+      contacts: const _FixtureContacts(),
+      commands: WeComOverlayCommandService(
+        overlayDatabase: overlayDatabase,
+        contract: contract,
+        identityScope: identityScope,
+      ),
+      messageOverlay: WeComMessageOverlayRepository(
+        overlayDatabase: overlayDatabase,
+        identityScope: identityScope,
+      ),
+    );
+    expect(
+      (await sameIdentity.listMessages('S:1_2')).first.text,
+      'same identity',
+    );
+    final mismatchedBase = await WeComMessageOverlayRepository(
+      overlayDatabase: overlayDatabase,
+      identityScope: identityScope,
+    ).apply(
+      conversationId: 'S:1_2',
+      messages: [
+        OfflineMessage(
+          id: '1',
+          conversationId: 'S:1_2',
+          senderProfileId: '2',
+          senderName: 'Peer',
+          kind: 'text',
+          text: 'different source content',
+          sentAt: DateTime.fromMillisecondsSinceEpoch(10000, isUtc: true),
+          status: '',
+          isRecalled: false,
+        ),
+      ],
+      baseTargetKeys: {'1': 'base:1:different-source-content'},
+      senderNames: const {'1': 'Current user', '2': 'Peer'},
+    );
+    expect(mismatchedBase.single.text, 'different source content');
+    const otherScope = WeComIdentityScope(corporationId: 100, userId: 3);
+    final otherIdentity = WeComOfflineConversationRepository(
+      datasetId: datasetId,
+      currentUserId: 3,
+      conversations: WeComMergedConversationRepository(
+        datasetId: datasetId,
+        identityScope: otherScope,
+        baseRepository: WeComConversationRepository(baseDatabase),
+        overlayDatabase: overlayDatabase,
+      ),
+      messages: messageRepository,
+      contacts: const _FixtureContacts(),
+      commands: WeComOverlayCommandService(
+        overlayDatabase: overlayDatabase,
+        contract: contract,
+        identityScope: otherScope,
+      ),
+      messageOverlay: WeComMessageOverlayRepository(
+        overlayDatabase: overlayDatabase,
+        identityScope: otherScope,
+      ),
+    );
+    expect((await otherIdentity.listMessages('S:1_2')).first.text, '再');
+    final after = await messageDatabase.rawQuery(
+      'SELECT content FROM message_table WHERE message_id = 1',
+    );
+    expect(after, before);
+    final businessOperations = await overlayDatabase.connection.query(
+      WeComOverlaySchema.operationsTable,
+    );
+    expect(businessOperations, isEmpty);
   });
 
   test('persists only certified pin and mute scalar revisions', () async {
@@ -804,6 +1036,13 @@ CREATE TABLE draft_table_1 (
     'nick_name': 'Peer nick',
     'is_admin': 1,
   });
+  for (final userId in [1, 2]) {
+    await database.insert('conversation_user_table', {
+      'conversation_id': 'R:room',
+      'user_id': userId,
+      'nick_name': userId == 1 ? 'Current user' : 'Peer',
+    });
+  }
   await database.insert('draft_table_1', {
     'conversation_id': 'S:1_2',
     'content': base64Decode(

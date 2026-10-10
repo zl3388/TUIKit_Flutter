@@ -137,6 +137,13 @@ class OfflineDemoStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshCallRecords() async {
+    callRecords = callsAvailable
+        ? await repositories.activity.listCallRecords()
+        : const [];
+    notifyListeners();
+  }
+
   Future<void> setConversationPinned(
     String conversationId,
     bool isPinned,

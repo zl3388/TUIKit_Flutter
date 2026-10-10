@@ -140,6 +140,7 @@ class WeComActiveDatasetResolver {
           {
             'previous_dataset_id': null,
             'dataset_id': datasetId,
+            'scene_id': _overlayDatabase.sceneId,
             'merge_id': null,
             'current_corp_id': identity.corporationId,
             'current_user_id': identity.userId,
@@ -160,6 +161,7 @@ class WeComActiveDatasetResolver {
           {
             'previous_dataset_id': datasetId,
             'dataset_id': datasetId,
+            'scene_id': _overlayDatabase.sceneId,
             'merge_id': null,
             'current_corp_id': identity.corporationId,
             'current_user_id': identity.userId,
@@ -218,6 +220,7 @@ class WeComActiveDatasetResolver {
         {
           'previous_dataset_id': datasetId,
           'dataset_id': datasetId,
+          'scene_id': 'default',
           'merge_id': null,
           'current_corp_id': identity.corporationId,
           'current_user_id': identity.userId,
@@ -384,12 +387,19 @@ class WeComActiveDatasetResolver {
         'dataset_id',
         'current_corp_id',
         'current_user_id',
+        'scene_id',
       ],
       orderBy: 'activation_id DESC',
       limit: 1,
     );
     if (rows.isEmpty) {
       return null;
+    }
+    if (rows.single['scene_id'] != _overlayDatabase.sceneId) {
+      throw const WeComActiveDatasetException(
+        WeComActiveDatasetIssueCode.activeDatasetChanged,
+        'Active scene changed while repositories were being opened',
+      );
     }
     final activationId = rows.single['activation_id'];
     final datasetId = rows.single['dataset_id'];

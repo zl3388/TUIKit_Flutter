@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../data/wecom_conversation_editor.dart';
+import '../data/wecom_message_editor.dart';
+import '../data/wecom_message_overlay_repository.dart';
 import '../domain/models.dart';
 import '../domain/repositories.dart';
+import '../state/admin_access_controller.dart';
 import '../state/offline_demo_store.dart';
 import 'offline_theme.dart';
 import 'offline_widgets.dart';
@@ -13,11 +16,15 @@ class ConversationsPage extends StatefulWidget {
   const ConversationsPage({
     required this.store,
     this.conversationEditor,
+    this.messageEditor,
+    this.adminAccess,
     super.key,
   });
 
   final OfflineDemoStore store;
   final WeComConversationEditor? conversationEditor;
+  final WeComMessageEditor? messageEditor;
+  final AdminAccessController? adminAccess;
 
   @override
   State<ConversationsPage> createState() => _ConversationsPageState();
@@ -58,6 +65,8 @@ class _ConversationsPageState extends State<ConversationsPage> {
             currentProfileId: widget.store.profile?.id,
             store: widget.store,
             conversationEditor: widget.conversationEditor,
+            messageEditor: widget.messageEditor,
+            adminAccess: widget.adminAccess,
           ),
         ),
       );
@@ -638,6 +647,8 @@ class ConversationPage extends StatefulWidget {
     required this.currentProfileId,
     required this.store,
     this.conversationEditor,
+    this.messageEditor,
+    this.adminAccess,
     super.key,
   });
 
@@ -645,6 +656,8 @@ class ConversationPage extends StatefulWidget {
   final String? currentProfileId;
   final OfflineDemoStore store;
   final WeComConversationEditor? conversationEditor;
+  final WeComMessageEditor? messageEditor;
+  final AdminAccessController? adminAccess;
 
   @override
   State<ConversationPage> createState() => _ConversationPageState();
@@ -670,6 +683,12 @@ class _ConversationPageState extends State<ConversationPage> {
         ConversationFeature.draft,
       );
 
+  bool get _canEditMessages =>
+      widget.messageEditor != null &&
+      (widget.adminAccess?.isAdmin ?? false) &&
+      (widget.conversation.id.startsWith('S:') ||
+          widget.conversation.id.startsWith('R:'));
+
   @override
   void initState() {
     super.initState();
@@ -679,6 +698,7 @@ class _ConversationPageState extends State<ConversationPage> {
     if (_canSendText) {
       _composerController.addListener(_handleComposerChanged);
     }
+    widget.adminAccess?.addListener(_onAdminAccessChanged);
     _canSend = _canSendText &&
         widget.currentProfileId != null &&
         widget.conversation.draftText.trim().isNotEmpty;
@@ -693,8 +713,13 @@ class _ConversationPageState extends State<ConversationPage> {
     _composerController
       ..removeListener(_handleComposerChanged)
       ..dispose();
+    widget.adminAccess?.removeListener(_onAdminAccessChanged);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onAdminAccessChanged() {
+    if (mounted) setState(() {});
   }
 
   void _handleComposerChanged() {
@@ -892,6 +917,169 @@ class _ConversationPageState extends State<ConversationPage> {
     }
   }
 
+  Future<void> _editOverlayMessage([OfflineMessage? message]) async {
+    final editor = widget.messageEditor;
+    if (!_canEditMessages || editor == null) return;
+    try {
+      final senders = await editor.sendersFor(widget.conversation.id);
+      if (!mounted || !_canEditMessages) return;
+      if (senders.isEmpty) {
+        _showEditFeedback('此会话没有可确认的发送者');
+        return;
+      }
+      var senderId = message?.senderProfileId ?? widget.currentProfileId;
+      if (!senders.any((sender) => sender.id == senderId)) {
+        senderId = null;
+      }
+      var messageText = message?.kind == 'text' ? message!.text : '';
+      final selection = await showDialog<({String senderId, String text})>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text(message == null ? '新增本地消息' : '本地覆盖消息'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    key: const Key('overlay-message-sender'),
+                    initialValue: senderId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '发送者'),
+                    items: [
+                      for (final sender in senders)
+                        DropdownMenuItem(
+                          value: sender.id,
+                          child: Text(
+                            '${sender.displayName} (${sender.id})',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() => senderId = value);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    key: const Key('overlay-message-text'),
+                    initialValue: messageText,
+                    onChanged: (value) => messageText = value,
+                    autofocus: true,
+                    minLines: 2,
+                    maxLines: 6,
+                    decoration: const InputDecoration(labelText: '消息文本'),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                key: const Key('save-overlay-message'),
+                onPressed: senderId == null
+                    ? null
+                    : () => Navigator.of(context).pop((
+                          senderId: senderId!,
+                          text: messageText,
+                        )),
+                child: const Text('保存'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (selection == null || !mounted || !_canEditMessages) return;
+      final edit = message == null
+          ? await editor.add(
+              conversationId: widget.conversation.id,
+              senderId: selection.senderId,
+              text: selection.text,
+            )
+          : await editor.replace(
+              conversationId: widget.conversation.id,
+              messageId: message.id,
+              senderId: selection.senderId,
+              text: selection.text,
+            );
+      await _afterOverlayEdit(edit, scrollToEnd: message == null);
+    } catch (error) {
+      if (mounted) _showEditFeedback('消息编辑失败：$error');
+    }
+  }
+
+  Future<void> _hideOverlayMessage(OfflineMessage message) async {
+    final editor = widget.messageEditor;
+    if (!_canEditMessages || editor == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('隐藏消息'),
+        content: const Text('仅从本应用的会话视图隐藏，原数据库不会改变。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('confirm-hide-overlay-message'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('隐藏'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || !_canEditMessages) return;
+    try {
+      final edit = await editor.hide(
+        conversationId: widget.conversation.id,
+        messageId: message.id,
+      );
+      await _afterOverlayEdit(edit);
+    } catch (error) {
+      if (mounted) _showEditFeedback('隐藏失败：$error');
+    }
+  }
+
+  Future<void> _afterOverlayEdit(
+    WeComMessageOverlayEdit edit, {
+    bool scrollToEnd = false,
+  }) async {
+    await _loadMessages(scrollToEnd: scrollToEnd);
+    await widget.store.refreshConversations();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: const Text('本地消息已更新'),
+      action: SnackBarAction(
+        label: '撤销',
+        onPressed: () => unawaited(_undoOverlayEdit(edit)),
+      ),
+    ));
+  }
+
+  Future<void> _undoOverlayEdit(WeComMessageOverlayEdit edit) async {
+    final editor = widget.messageEditor;
+    if (editor == null) return;
+    try {
+      await editor.undo(edit);
+      await _loadMessages();
+      await widget.store.refreshConversations();
+    } catch (error) {
+      if (mounted) _showEditFeedback('撤销失败：$error');
+    }
+  }
+
+  void _showEditFeedback(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   void _scheduleScrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) {
@@ -908,7 +1096,18 @@ class _ConversationPageState extends State<ConversationPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.conversation.title)),
+      appBar: AppBar(
+        title: Text(widget.conversation.title),
+        actions: [
+          if (_canEditMessages)
+            IconButton(
+              key: const Key('add-overlay-message'),
+              tooltip: '新增本地消息',
+              onPressed: () => _editOverlayMessage(),
+              icon: const Icon(Icons.add_comment_outlined),
+            ),
+        ],
+      ),
       body: Column(
         children: [
           Expanded(child: _buildMessages(context)),
@@ -946,20 +1145,29 @@ class _ConversationPageState extends State<ConversationPage> {
         itemCount: _messages.length,
         itemBuilder: (context, index) {
           final message = _messages[index];
+          final overlayActions =
+              _canEditMessages ? _overlayMessageActions(message) : null;
           final showDate = index == 0 ||
               !_isSameLocalDate(_messages[index - 1].sentAt, message.sentAt);
           return Column(
             children: [
               if (showDate) _MessageDateSeparator(message: message),
-              if (message.kind == 'system')
-                _SystemMessage(message: message)
-              else
+              if (message.kind == 'system') ...[
+                _SystemMessage(message: message),
+                if (overlayActions != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: overlayActions,
+                  ),
+              ] else
                 _MessageBubble(
                   message: message,
                   isMine: message.senderProfileId == widget.currentProfileId,
                   attachments: _attachmentsByMessageId[message.id] ?? const [],
                   onOpenAttachment: _openAttachment,
-                  onCancelLocalMessage: widget.conversationEditor != null &&
+                  overlayActions: overlayActions,
+                  onCancelLocalMessage: _canEditMessages &&
+                          widget.conversationEditor != null &&
                           message.progressSource ==
                               OfflineMessageProgressSource.localSimulation &&
                           message.id.startsWith('local:')
@@ -970,6 +1178,34 @@ class _ConversationPageState extends State<ConversationPage> {
           );
         },
       ),
+    );
+  }
+
+  Widget _overlayMessageActions(OfflineMessage message) {
+    return PopupMenuButton<_OverlayMessageAction>(
+      key: Key('overlay-message-actions-${message.id}'),
+      tooltip: '消息本地操作',
+      icon: const Icon(Icons.more_horiz_rounded),
+      iconSize: 20,
+      padding: EdgeInsets.zero,
+      onSelected: (action) {
+        switch (action) {
+          case _OverlayMessageAction.replace:
+            _editOverlayMessage(message);
+          case _OverlayMessageAction.hide:
+            _hideOverlayMessage(message);
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: _OverlayMessageAction.replace,
+          child: Text('本地覆盖'),
+        ),
+        PopupMenuItem(
+          value: _OverlayMessageAction.hide,
+          child: Text('本地隐藏'),
+        ),
+      ],
     );
   }
 
@@ -1029,6 +1265,8 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 }
 
+enum _OverlayMessageAction { replace, hide }
+
 bool _isSameLocalDate(DateTime first, DateTime second) {
   final firstLocal = first.toLocal();
   final secondLocal = second.toLocal();
@@ -1069,6 +1307,7 @@ class _MessageBubble extends StatelessWidget {
     required this.attachments,
     required this.onOpenAttachment,
     required this.onCancelLocalMessage,
+    required this.overlayActions,
   });
 
   final OfflineMessage message;
@@ -1076,6 +1315,7 @@ class _MessageBubble extends StatelessWidget {
   final List<OfflineAttachment> attachments;
   final ValueChanged<OfflineAttachment> onOpenAttachment;
   final VoidCallback? onCancelLocalMessage;
+  final Widget? overlayActions;
 
   @override
   Widget build(BuildContext context) {
@@ -1176,10 +1416,22 @@ class _MessageBubble extends StatelessWidget {
                             color: const Color(0xFF849096),
                           ),
                     ),
+                    if (message.isLocalOverlay) ...[
+                      const SizedBox(width: 4),
+                      const Tooltip(
+                        message: '本地消息编辑',
+                        child: Icon(
+                          Icons.edit_note_rounded,
+                          size: 15,
+                          color: Color(0xFF849096),
+                        ),
+                      ),
+                    ],
                     if (isMine && _progressIcon != null) ...[
                       const SizedBox(width: 4),
                       _progressIcon!,
                     ],
+                    if (overlayActions != null) overlayActions!,
                   ],
                 ),
               ],

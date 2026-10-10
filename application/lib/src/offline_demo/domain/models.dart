@@ -181,6 +181,7 @@ class OfflineMessage {
     this.progressSource = OfflineMessageProgressSource.none,
     this.peerReaderCount = 0,
     this.nextProgressAt,
+    this.isLocalOverlay = false,
   });
 
   final String id;
@@ -198,6 +199,7 @@ class OfflineMessage {
   final OfflineMessageProgressSource progressSource;
   final int peerReaderCount;
   final DateTime? nextProgressAt;
+  final bool isLocalOverlay;
 
   factory OfflineMessage.fromRow(Map<String, Object?> row) => OfflineMessage(
         id: row['id']! as String,

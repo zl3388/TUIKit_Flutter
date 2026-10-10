@@ -45,11 +45,15 @@ class WorkbenchPage extends StatelessWidget {
         label: '通话记录',
         icon: Icons.call_outlined,
         color: const Color(0xFFB45309),
-        open: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (context) => CallRecordsPage(store: store),
-          ),
-        ),
+        open: () async {
+          await store.refreshCallRecords();
+          if (!context.mounted) return;
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (context) => CallRecordsPage(store: store),
+            ),
+          );
+        },
       ),
       _WorkbenchTool(
         label: '数据概览',

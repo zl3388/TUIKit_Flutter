@@ -45,6 +45,31 @@ class WeComSimulatedExchange {
   }
 }
 
+class WeComSimulatedCall {
+  const WeComSimulatedCall({
+    required this.eventKey,
+    required this.peerProfileId,
+    required this.scheduledAt,
+    required this.createdAt,
+    this.rejectedAt,
+  });
+
+  final String eventKey;
+  final String peerProfileId;
+  final DateTime scheduledAt;
+  final DateTime createdAt;
+  final DateTime? rejectedAt;
+
+  DateTime get ringEndsAt => scheduledAt.add(const Duration(seconds: 20));
+
+  String statusAt(DateTime instant) {
+    if (rejectedAt != null) return 'rejected';
+    if (instant.isBefore(scheduledAt)) return 'scheduled';
+    if (instant.isBefore(ringEndsAt)) return 'ringing';
+    return 'missed';
+  }
+}
+
 class WeComLocalSimulationRepository {
   WeComLocalSimulationRepository({
     required WeComOverlayDatabase overlayDatabase,
@@ -59,6 +84,9 @@ class WeComLocalSimulationRepository {
 
   static const _textExchangeEventType = 'textExchange';
   static const _cancelExchangeEventType = 'cancelExchange';
+  static const _scheduledCallEventType = 'scheduledCall';
+  static const _cancelCallEventType = 'cancelCall';
+  static const _rejectCallEventType = 'rejectCall';
   static const _automaticReplyText = '收到';
 
   final WeComOverlayDatabase _overlayDatabase;
@@ -104,6 +132,7 @@ class WeComLocalSimulationRepository {
         'identity_user_id': _identityScope.userId,
         'event_key': eventKey,
         'event_type': _textExchangeEventType,
+        'scene_id': _overlayDatabase.sceneId,
         'payload_json': jsonEncode(payload),
         'reverts_event_id': null,
         'created_at_micros': createdAt.microsecondsSinceEpoch,
@@ -130,10 +159,11 @@ class WeComLocalSimulationRepository {
         'created_at_micros',
       ],
       where: 'identity_corp_id = ? AND identity_user_id = ? '
-          'AND event_type IN (?, ?)',
+          'AND scene_id = ? AND event_type IN (?, ?)',
       whereArgs: [
         _identityScope.corporationId,
         _identityScope.userId,
+        _overlayDatabase.sceneId,
         _textExchangeEventType,
         _cancelExchangeEventType,
       ],
@@ -164,10 +194,11 @@ class WeComLocalSimulationRepository {
       WeComOverlaySchema.simulationEventsTable,
       columns: ['event_id'],
       where: 'identity_corp_id = ? AND identity_user_id = ? '
-          'AND event_key = ? AND event_type = ?',
+          'AND scene_id = ? AND event_key = ? AND event_type = ?',
       whereArgs: [
         _identityScope.corporationId,
         _identityScope.userId,
+        _overlayDatabase.sceneId,
         eventKey,
         _textExchangeEventType,
       ],
@@ -184,8 +215,152 @@ class WeComLocalSimulationRepository {
         'identity_user_id': _identityScope.userId,
         'event_key': '$eventKey-cancel-${createdAt.microsecondsSinceEpoch}',
         'event_type': _cancelExchangeEventType,
+        'scene_id': _overlayDatabase.sceneId,
         'payload_json': '{"version":1}',
         'reverts_event_id': rows.single['event_id']! as int,
+        'created_at_micros': createdAt.microsecondsSinceEpoch,
+      },
+    );
+  }
+
+  Future<WeComSimulatedCall> scheduleCall({
+    required String peerProfileId,
+    required DateTime scheduledAt,
+  }) async {
+    if (peerProfileId.trim().isEmpty) {
+      throw ArgumentError.value(peerProfileId, 'peerProfileId');
+    }
+    final createdAt = now;
+    final due = scheduledAt.toUtc();
+    if (!due.isAfter(createdAt)) {
+      throw ArgumentError.value(scheduledAt, 'scheduledAt', 'Must be future.');
+    }
+    final eventKey = '${_identityScope.userId}-call-'
+        '${createdAt.microsecondsSinceEpoch}-${_sequence++}';
+    await _overlayDatabase.connection.insert(
+      WeComOverlaySchema.simulationEventsTable,
+      {
+        'identity_corp_id': _identityScope.corporationId,
+        'identity_user_id': _identityScope.userId,
+        'event_key': eventKey,
+        'event_type': _scheduledCallEventType,
+        'scene_id': _overlayDatabase.sceneId,
+        'payload_json': jsonEncode({
+          'version': 1,
+          'peerProfileId': peerProfileId,
+          'scheduledAtMicros': due.microsecondsSinceEpoch,
+        }),
+        'reverts_event_id': null,
+        'created_at_micros': createdAt.microsecondsSinceEpoch,
+      },
+    );
+    return WeComSimulatedCall(
+      eventKey: eventKey,
+      peerProfileId: peerProfileId,
+      scheduledAt: due,
+      createdAt: createdAt,
+    );
+  }
+
+  Future<List<WeComSimulatedCall>> listCalls() async {
+    final rows = await _overlayDatabase.connection.query(
+      WeComOverlaySchema.simulationEventsTable,
+      columns: [
+        'event_id',
+        'event_key',
+        'event_type',
+        'payload_json',
+        'reverts_event_id',
+        'created_at_micros',
+      ],
+      where: 'identity_corp_id = ? AND identity_user_id = ? '
+          'AND scene_id = ? AND event_type IN (?, ?, ?)',
+      whereArgs: [
+        _identityScope.corporationId,
+        _identityScope.userId,
+        _overlayDatabase.sceneId,
+        _scheduledCallEventType,
+        _cancelCallEventType,
+        _rejectCallEventType,
+      ],
+      orderBy: 'event_id ASC',
+    );
+    final cancellations = rows
+        .where((row) => row['event_type'] == _cancelCallEventType)
+        .map((row) => row['reverts_event_id'] as int)
+        .toSet();
+    final rejections = {
+      for (final row in rows.where(
+        (row) => row['event_type'] == _rejectCallEventType,
+      ))
+        row['reverts_event_id'] as int:
+            _fromMicros(row['created_at_micros'] as int),
+    };
+    final calls = rows
+        .where((row) =>
+            row['event_type'] == _scheduledCallEventType &&
+            !cancellations.contains(row['event_id']))
+        .map((row) {
+      final value = jsonDecode(row['payload_json'] as String);
+      if (value is! Map<String, Object?> || value['version'] != 1) {
+        throw const FormatException('Unsupported scheduled call payload.');
+      }
+      return WeComSimulatedCall(
+        eventKey: row['event_key'] as String,
+        peerProfileId: _requiredString(value, 'peerProfileId'),
+        scheduledAt: _fromMicros(_requiredInt(value, 'scheduledAtMicros')),
+        createdAt: _fromMicros(row['created_at_micros'] as int),
+        rejectedAt: rejections[row['event_id']],
+      );
+    }).toList(growable: false);
+    calls.sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt));
+    return List.unmodifiable(calls);
+  }
+
+  Future<void> cancelCall(String eventKey) =>
+      _appendCallAction(eventKey, _cancelCallEventType);
+
+  Future<void> rejectCall(String eventKey) =>
+      _appendCallAction(eventKey, _rejectCallEventType);
+
+  Future<void> _appendCallAction(String eventKey, String eventType) async {
+    final rows = await _overlayDatabase.connection.query(
+      WeComOverlaySchema.simulationEventsTable,
+      columns: ['event_id', 'payload_json'],
+      where: 'identity_corp_id = ? AND identity_user_id = ? '
+          'AND scene_id = ? AND event_key = ? AND event_type = ?',
+      whereArgs: [
+        _identityScope.corporationId,
+        _identityScope.userId,
+        _overlayDatabase.sceneId,
+        eventKey,
+        _scheduledCallEventType,
+      ],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('Scheduled call does not exist.');
+    final createdAt = now;
+    if (eventType == _rejectCallEventType) {
+      final payload = jsonDecode(rows.single['payload_json'] as String);
+      if (payload is! Map<String, Object?> || payload['version'] != 1) {
+        throw const FormatException('Unsupported scheduled call payload.');
+      }
+      final due = _fromMicros(_requiredInt(payload, 'scheduledAtMicros'));
+      if (createdAt.isBefore(due) ||
+          !createdAt.isBefore(due.add(const Duration(seconds: 20)))) {
+        throw StateError('Call is not ringing.');
+      }
+    }
+    await _overlayDatabase.connection.insert(
+      WeComOverlaySchema.simulationEventsTable,
+      {
+        'identity_corp_id': _identityScope.corporationId,
+        'identity_user_id': _identityScope.userId,
+        'event_key': '$eventKey-$eventType',
+        'event_type': eventType,
+        'scene_id': _overlayDatabase.sceneId,
+        'payload_json': '{"version":1}',
+        'reverts_event_id': rows.single['event_id'] as int,
         'created_at_micros': createdAt.microsecondsSinceEpoch,
       },
     );

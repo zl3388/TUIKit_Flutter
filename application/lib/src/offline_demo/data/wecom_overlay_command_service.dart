@@ -131,6 +131,7 @@ class WeComOverlayCommandService {
             WeComOverlaySchema.operationsTable,
             {
               'dataset_id': datasetId,
+              'scene_id': _overlayDatabase.sceneId,
               'identity_corp_id': _identityScope.corporationId,
               'identity_user_id': _identityScope.userId,
               'database_name': mutation.databaseName,
@@ -200,6 +201,7 @@ class WeComOverlayCommandService {
       WeComOverlaySchema.operationsTable,
       columns: [
         'dataset_id',
+        'scene_id',
         'identity_corp_id',
         'identity_user_id',
         'database_name',
@@ -215,6 +217,7 @@ class WeComOverlayCommandService {
     }
     final row = rows.single;
     if (row['dataset_id'] != datasetId ||
+        row['scene_id'] != _overlayDatabase.sceneId ||
         row['identity_corp_id'] != _identityScope.corporationId ||
         row['identity_user_id'] != _identityScope.userId ||
         row['database_name'] != databaseName ||

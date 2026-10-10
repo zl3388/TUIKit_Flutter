@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:application/src/offline_demo/bootstrap/offline_bootstrap.dart';
@@ -5,10 +6,13 @@ import 'package:application/src/offline_demo/data/local_media_store.dart';
 import 'package:application/src/offline_demo/data/wecom_active_dataset_runtime.dart';
 import 'package:application/src/offline_demo/data/wecom_data_source_service.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_source_directory_access.dart';
 import 'package:application/src/offline_demo/domain/models.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
+import 'package:application/src/offline_demo/offline_demo_app.dart';
 import 'package:application/src/offline_demo/presentation/offline_home.dart';
 import 'package:application/src/offline_demo/presentation/offline_theme.dart';
 import 'package:application/src/offline_demo/state/admin_access_controller.dart';
@@ -186,6 +190,95 @@ void main() {
     expect(find.byKey(const Key('offline-version-entry')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('rebinds admin updates after reloading the active environment',
+      (tester) async {
+    final first = (await tester.runAsync(_HomeFixture.create))!;
+    final second = (await tester.runAsync(_HomeFixture.create))!;
+    addTearDown(first.close);
+    addTearDown(second.close);
+    final next = Completer<OfflineEnvironment>();
+    var loads = 0;
+    await tester.pumpWidget(OfflineDemoApp(
+      loadEnvironment: () =>
+          ++loads == 1 ? Future.value(first.environment) : next.future,
+    ));
+    await tester.pumpAndSettle();
+    await first.environment.adminAccess.setupPin('0000');
+    await tester.pumpAndSettle();
+    expect(find.text('管理模式'), findsOneWidget);
+
+    final reload = tester
+        .widget<OfflineHome>(find.byType(OfflineHome))
+        .onEnvironmentReload();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+    expect(find.byType(OfflineHome), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    next.complete(second.environment);
+    await tester.runAsync(() => reload);
+    await tester.pumpAndSettle();
+    expect(find.text('管理模式'), findsNothing);
+    await second.environment.adminAccess.setupPin('0000');
+    await tester.pumpAndSettle();
+    expect(find.text('管理模式'), findsOneWidget);
+    second.environment.adminAccess.exitAdminMode();
+    await tester.pumpAndSettle();
+    expect(find.text('管理模式'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('shows a scheduled incoming call when its local time arrives',
+      (tester) async {
+    var now = DateTime.utc(2026, 9, 29, 8);
+    final fixture = (await tester.runAsync(
+      () => _HomeFixture.create(simulationNow: () => now),
+    ))!;
+    addTearDown(fixture.close);
+    final simulation = fixture.environment.wecomSimulation!;
+    final call = await tester.runAsync(() => simulation.scheduleCall(
+          peerProfileId: '2',
+          scheduledAt: now.add(const Duration(hours: 1)),
+        ));
+
+    await tester.pumpWidget(MaterialApp(
+      theme: OfflineTheme.light,
+      home: OfflineHome(
+        environment: fixture.environment,
+        onEnvironmentReload: () async {},
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('语音来电'), findsNothing);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    now = call!.scheduledAt;
+    await tester.runAsync(fixture.environment.store.refreshCallRecords);
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+    expect(find.text('语音来电'), findsNothing);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('语音来电'), findsOneWidget);
+    expect(find.byKey(const Key('reject-simulated-call')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+  });
 }
 
 class _HomeFixture {
@@ -199,7 +292,10 @@ class _HomeFixture {
   final _RecordingAttachmentOpener opener;
   final Directory root;
 
-  static Future<_HomeFixture> create({bool identityAvailable = true}) async {
+  static Future<_HomeFixture> create({
+    bool identityAvailable = true,
+    DateTime Function()? simulationNow,
+  }) async {
     final root = await Directory.systemTemp.createTemp('tui_offline_home_');
     final mediaRoot = Directory(p.join(root.path, 'media'));
     final wecomRoot = await Directory(p.join(root.path, 'wecom')).create();
@@ -210,6 +306,14 @@ class _HomeFixture {
       factory: databaseFactoryFfi,
       databasePath: p.join(wecomRoot.path, WeComOverlayDatabase.fileName),
     );
+    final simulation = simulationNow == null
+        ? null
+        : WeComLocalSimulationRepository(
+            overlayDatabase: overlay,
+            identityScope:
+                const WeComIdentityScope(corporationId: 100, userId: 1),
+            now: simulationNow,
+          );
     final opener = _RecordingAttachmentOpener();
     final repositories = OfflineRepositoryBundle(
       identityRepository: identityAvailable
@@ -248,6 +352,7 @@ class _HomeFixture {
       ),
       wecomDataSources: const _UnavailableDataSourceManager(),
       wecomSourceDirectories: const _UnavailableSourceDirectoryAccess(),
+      wecomSimulation: simulation,
     );
     return _HomeFixture(
       environment: environment,

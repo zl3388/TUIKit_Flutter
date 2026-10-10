@@ -374,68 +374,72 @@ class CallRecordsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('通话记录')),
-      body: !store.callsAvailable
-          ? const _ActivityState(
-              icon: Icons.call_outlined,
-              label: '通话数据尚未映射',
-            )
-          : store.callRecords.isEmpty
-              ? const _ActivityState(
-                  icon: Icons.call_outlined,
-                  label: '暂无通话记录',
-                )
-              : ListView.separated(
-                  itemCount: store.callRecords.length,
-                  separatorBuilder: (context, index) =>
-                      const Divider(indent: 76),
-                  itemBuilder: (context, index) {
-                    final record = store.callRecords[index];
-                    final missed = record.status == 'missed';
-                    final direction = switch (record.direction) {
-                      'incoming' => '呼入',
-                      'outgoing' => '呼出',
-                      _ => '群聊',
-                    };
-                    final duration = switch (record.status) {
-                      'missed' => '未接',
-                      'rejected' => '已拒绝',
-                      'cancelled_self' => '已取消',
-                      'cancelled_peer' => '对方已取消',
-                      _ when record.durationSeconds > 0 =>
-                        formatDuration(record.durationSeconds),
-                      _ => '未接通',
-                    };
-                    return Material(
-                      color: Colors.white,
-                      child: ListTile(
-                        leading: OfflineAvatar(
-                          id: record.id,
-                          label: record.peerName,
-                          size: 44,
-                        ),
-                        title: Text(
-                          record.peerName,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: missed
-                                ? Theme.of(context).colorScheme.error
-                                : null,
+    return AnimatedBuilder(
+      animation: store,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(title: const Text('通话记录')),
+        body: !store.callsAvailable
+            ? const _ActivityState(
+                icon: Icons.call_outlined,
+                label: '通话数据尚未映射',
+              )
+            : store.callRecords.isEmpty
+                ? const _ActivityState(
+                    icon: Icons.call_outlined,
+                    label: '暂无通话记录',
+                  )
+                : ListView.separated(
+                    itemCount: store.callRecords.length,
+                    separatorBuilder: (context, index) =>
+                        const Divider(indent: 76),
+                    itemBuilder: (context, index) {
+                      final record = store.callRecords[index];
+                      final missed = record.status == 'missed';
+                      final direction = switch (record.direction) {
+                        'incoming' => '呼入',
+                        'outgoing' => '呼出',
+                        _ => '群聊',
+                      };
+                      final duration = switch (record.status) {
+                        'missed' => '未接',
+                        'ringing' => '响铃中',
+                        'rejected' => '已拒绝',
+                        'cancelled_self' => '已取消',
+                        'cancelled_peer' => '对方已取消',
+                        _ when record.durationSeconds > 0 =>
+                          formatDuration(record.durationSeconds),
+                        _ => '未接通',
+                      };
+                      return Material(
+                        color: Colors.white,
+                        child: ListTile(
+                          leading: OfflineAvatar(
+                            id: record.id,
+                            label: record.peerName,
+                            size: 44,
+                          ),
+                          title: Text(
+                            record.peerName,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: missed
+                                  ? Theme.of(context).colorScheme.error
+                                  : null,
+                            ),
+                          ),
+                          subtitle: Text(
+                            '$direction · $duration · ${formatDateTime(record.startedAt)}',
+                          ),
+                          trailing: Icon(
+                            record.type == 'video'
+                                ? Icons.videocam_outlined
+                                : Icons.call_outlined,
                           ),
                         ),
-                        subtitle: Text(
-                          '$direction · $duration · ${formatDateTime(record.startedAt)}',
-                        ),
-                        trailing: Icon(
-                          record.type == 'video'
-                              ? Icons.videocam_outlined
-                              : Icons.call_outlined,
-                        ),
-                      ),
-                    );
-                  },
-                ),
+                      );
+                    },
+                  ),
+      ),
     );
   }
 }

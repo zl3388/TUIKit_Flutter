@@ -205,11 +205,12 @@ class WeComIncrementalMergePlanner {
     final rows = await overlayDatabase.connection.query(
       WeComOverlaySchema.operationsTable,
       where: 'dataset_id = ? AND identity_corp_id = ? '
-          'AND identity_user_id = ?',
+          'AND identity_user_id = ? AND scene_id = ?',
       whereArgs: [
         oldBasePackage.datasetId,
         identityScope.corporationId,
         identityScope.userId,
+        overlayDatabase.sceneId,
       ],
       orderBy: 'revision_id',
     );

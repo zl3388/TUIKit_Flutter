@@ -258,7 +258,18 @@ class WeComDataSourceService implements WeComDataSourceManager {
   final WeComSourceDirectoryResolver _sourceDirectoryResolver;
 
   @override
-  Future<WeComSavedDataSource?> loadSelectedSource() => _selectionStore.read();
+  Future<WeComSavedDataSource?> loadSelectedSource() async {
+    final saved = await _selectionStore.read();
+    final active = await _readLatestActivation(_overlayDatabase.connection);
+    if (saved == null ||
+        active == null ||
+        saved.datasetId != active.datasetId ||
+        saved.corporationId != active.corporationId ||
+        saved.userId != active.userId) {
+      return null;
+    }
+    return saved;
+  }
 
   @override
   Future<bool> hasDefaultRawKey() async =>
@@ -300,7 +311,7 @@ class WeComDataSourceService implements WeComDataSourceManager {
   Future<WeComPreparedDataSource> prepareSaved({
     String? temporaryRawKeyHex,
   }) async {
-    final saved = await _selectionStore.read();
+    final saved = await loadSelectedSource();
     if (saved == null) {
       throw const WeComDataSourceException(
         WeComDataSourceIssueCode.savedSourceUnavailable,
@@ -337,6 +348,25 @@ class WeComDataSourceService implements WeComDataSourceManager {
     );
     final keyToSave = _normalizeKey(defaultRawKeyToSave);
     final active = await _readLatestActivation(_overlayDatabase.connection);
+    if (active != null && active.sceneId != _overlayDatabase.sceneId) {
+      throw const WeComDataSourceException(
+        WeComDataSourceIssueCode.activeDatasetChanged,
+        'The active scene changed before source activation',
+      );
+    }
+    var targetSceneId = _overlayDatabase.sceneId;
+    if (active != null && !active.matches(identity)) {
+      final remembered = await _overlayDatabase.connection.query(
+        WeComOverlaySchema.datasetActivationsTable,
+        columns: ['scene_id'],
+        where: 'current_corp_id = ? AND current_user_id = ?',
+        whereArgs: [identity.corporationId, identity.userId],
+        orderBy: 'activation_id DESC',
+        limit: 1,
+      );
+      targetSceneId =
+          remembered.firstOrNull?['scene_id'] as String? ?? 'default';
+    }
     late WeComDataSourceActivationStatus status;
 
     if (active == null) {
@@ -366,9 +396,11 @@ class WeComDataSourceService implements WeComDataSourceManager {
         prepared.package.datasetId,
       );
       final knownTarget = targetActivations.any(
-        (activation) => activation.matches(identity),
+        (activation) =>
+            activation.matches(identity) && activation.sceneId == targetSceneId,
       );
-      if (!knownTarget && targetActivations.isNotEmpty) {
+      if (!knownTarget &&
+          targetActivations.any((row) => !row.matches(identity))) {
         throw const WeComDataSourceException(
           WeComDataSourceIssueCode.corporationSwitchDeferred,
           'Switching corporations inside one dataset is not available yet',
@@ -376,7 +408,8 @@ class WeComDataSourceService implements WeComDataSourceManager {
       }
 
       if (knownTarget) {
-        await _activateDirect(active, prepared.package.datasetId, identity);
+        await _activateDirect(
+            active, prepared.package.datasetId, identity, targetSceneId);
         status = WeComDataSourceActivationStatus.switched;
       } else if (active.matches(identity)) {
         final oldPackage = await _packageImporter.openImportedPackage(
@@ -395,7 +428,8 @@ class WeComDataSourceService implements WeComDataSourceManager {
         }
         status = WeComDataSourceActivationStatus.migrated;
       } else {
-        await _activateDirect(active, prepared.package.datasetId, identity);
+        await _activateDirect(
+            active, prepared.package.datasetId, identity, targetSceneId);
         status = WeComDataSourceActivationStatus.switched;
       }
     }
@@ -502,6 +536,7 @@ class WeComDataSourceService implements WeComDataSourceManager {
     _ActivationMetadata expectedActive,
     String targetDatasetId,
     WeComDatasetIdentity identity,
+    String sceneId,
   ) {
     return _overlayDatabase.connection.transaction((transaction) async {
       final current = await _readLatestActivation(transaction);
@@ -517,6 +552,7 @@ class WeComDataSourceService implements WeComDataSourceManager {
         {
           'previous_dataset_id': current.datasetId,
           'dataset_id': targetDatasetId,
+          'scene_id': sceneId,
           'merge_id': null,
           'current_corp_id': identity.corporationId,
           'current_user_id': identity.userId,
@@ -536,6 +572,7 @@ class WeComDataSourceService implements WeComDataSourceManager {
         'dataset_id',
         'current_corp_id',
         'current_user_id',
+        'scene_id',
       ],
       orderBy: 'activation_id DESC',
       limit: 1,
@@ -554,6 +591,7 @@ class WeComDataSourceService implements WeComDataSourceManager {
         'dataset_id',
         'current_corp_id',
         'current_user_id',
+        'scene_id',
       ],
       where: 'dataset_id = ?',
       whereArgs: [datasetId],
@@ -581,6 +619,7 @@ class _ActivationMetadata {
     required this.datasetId,
     required this.corporationId,
     required this.userId,
+    required this.sceneId,
   });
 
   factory _ActivationMetadata.fromRow(Map<String, Object?> row) {
@@ -603,6 +642,7 @@ class _ActivationMetadata {
       datasetId: datasetId,
       corporationId: corporationId as int?,
       userId: userId as int?,
+      sceneId: row['scene_id']! as String,
     );
   }
 
@@ -610,6 +650,7 @@ class _ActivationMetadata {
   final String datasetId;
   final int? corporationId;
   final int? userId;
+  final String sceneId;
 
   bool get hasIdentity => corporationId != null && userId != null;
 

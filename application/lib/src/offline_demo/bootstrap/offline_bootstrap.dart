@@ -19,9 +19,12 @@ import '../data/wecom_incremental_merge_planner.dart';
 import '../data/wecom_incremental_migration_service.dart';
 import '../data/wecom_identity_repository.dart';
 import '../data/wecom_local_simulation_repository.dart';
+import '../data/wecom_message_editor.dart';
+import '../data/wecom_message_overlay_repository.dart';
 import '../data/wecom_offline_conversation_repository.dart';
 import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
+import '../data/wecom_scene_service.dart';
 import '../data/wecom_source_directory_access.dart';
 import '../domain/repositories.dart';
 import '../state/admin_access_controller.dart';
@@ -39,8 +42,11 @@ class OfflineEnvironment {
     required this.wecomSourceDirectories,
     this.wecomDirectoryEditor,
     this.wecomConversationEditor,
+    this.wecomMessageEditor,
     this.wecomAnnouncementEditor,
+    this.wecomSimulation,
     this.wecomRuntime,
+    this.wecomScenes,
   });
 
   final LocalMediaStore mediaStore;
@@ -53,8 +59,11 @@ class OfflineEnvironment {
   final WeComSourceDirectoryAccess wecomSourceDirectories;
   final WeComDirectoryEditor? wecomDirectoryEditor;
   final WeComConversationEditor? wecomConversationEditor;
+  final WeComMessageEditor? wecomMessageEditor;
   final WeComAnnouncementEditor? wecomAnnouncementEditor;
+  final WeComLocalSimulationRepository? wecomSimulation;
   final WeComActiveDatasetRuntime? wecomRuntime;
+  final WeComSceneService? wecomScenes;
 
   bool _closed = false;
 
@@ -154,9 +163,20 @@ abstract final class OfflineBootstrap {
       ActivityRepository activityRepository;
       WeComDirectoryEditor? directoryEditor;
       WeComConversationEditor? conversationEditor;
+      WeComMessageEditor? messageEditor;
       WeComAnnouncementEditor? announcementEditor;
+      WeComLocalSimulationRepository? simulation;
+      WeComSceneService? scenes;
       try {
         runtime = await resolver.openActive();
+        scenes = WeComSceneService(
+          overlayDatabase: overlayDatabase,
+          datasetResolver: resolver,
+          identityScope: runtime.identity.identity.scope,
+          datasetId: runtime.datasetId,
+          canEdit: () => adminAccess!.isAdmin,
+        );
+        await scenes.ensureDefaultScene();
         final commands = WeComOverlayCommandService(
           overlayDatabase: overlayDatabase,
           contract: contract,
@@ -172,7 +192,12 @@ abstract final class OfflineBootstrap {
           directory: runtime.directory,
           commands: commands,
         );
-        final simulation = WeComLocalSimulationRepository(
+        final activeSimulation = WeComLocalSimulationRepository(
+          overlayDatabase: overlayDatabase,
+          identityScope: runtime.identity.identity.scope,
+        );
+        simulation = activeSimulation;
+        final messageOverlay = WeComMessageOverlayRepository(
           overlayDatabase: overlayDatabase,
           identityScope: runtime.identity.identity.scope,
         );
@@ -180,7 +205,7 @@ abstract final class OfflineBootstrap {
           datasetId: runtime.datasetId,
           conversations: runtime.conversations,
           commands: commands,
-          simulation: simulation,
+          simulation: activeSimulation,
         );
         final announcements = runtime.announcements;
         if (announcements != null) {
@@ -198,13 +223,22 @@ abstract final class OfflineBootstrap {
           contacts: contactRepository,
           commands: commands,
           media: runtime.media,
-          simulation: simulation,
+          simulation: activeSimulation,
+          messageOverlay: messageOverlay,
+        );
+        messageEditor = WeComMessageEditor(
+          conversations: conversationRepository,
+          contacts: contactRepository,
+          messages: runtime.messages,
+          overlay: messageOverlay,
+          canEdit: () => adminAccess!.isAdmin,
         );
         activityRepository = WeComActivityRepository(
           currentUserId: runtime.identity.identity.userId,
           messages: runtime.messages,
           contacts: contactRepository,
           announcements: announcements,
+          simulation: activeSimulation,
         );
       } on WeComActiveDatasetException catch (error) {
         if (error.code != WeComActiveDatasetIssueCode.noActiveDataset &&
@@ -237,8 +271,11 @@ abstract final class OfflineBootstrap {
         wecomSourceDirectories: sourceDirectories,
         wecomDirectoryEditor: directoryEditor,
         wecomConversationEditor: conversationEditor,
+        wecomMessageEditor: messageEditor,
         wecomAnnouncementEditor: announcementEditor,
+        wecomSimulation: simulation,
         wecomRuntime: runtime,
+        wecomScenes: scenes,
       );
     } catch (_) {
       try {

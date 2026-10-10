@@ -1,11 +1,15 @@
 import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_activity_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_message_repository.dart';
+import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/domain/models.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'wecom_message_test_fixture.dart';
@@ -176,6 +180,56 @@ void main() {
       repository.markNotificationRead('1'),
       throwsUnsupportedError,
     );
+  });
+
+  test('projects a due local call without changing source messages', () async {
+    final overlay = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: p.join(temporaryDirectory.path, 'overlay.db'),
+    );
+    addTearDown(overlay.close);
+    var now = DateTime.utc(2026, 9, 15, 8);
+    final simulation = WeComLocalSimulationRepository(
+      overlayDatabase: overlay,
+      identityScope: const WeComIdentityScope(corporationId: 100, userId: 1),
+      now: () => now,
+    );
+    final repository = WeComActivityRepository(
+      currentUserId: 1,
+      messages: WeComMessageRepository(
+        messageDatabase: messageDatabase,
+        lookupDatabase: lookupDatabase,
+      ),
+      contacts: const _Contacts(),
+      simulation: simulation,
+    );
+    final call = await simulation.scheduleCall(
+      peerProfileId: '2',
+      scheduledAt: now.add(const Duration(minutes: 1)),
+    );
+    expect(
+        (await repository.listCallRecords()).where(
+          (record) => record.id.startsWith('simulation:'),
+        ),
+        isEmpty);
+
+    now = call.scheduledAt;
+    final ringing = (await repository.listCallRecords()).first;
+    expect(ringing.peerName, '对方');
+    expect(ringing.status, 'ringing');
+    now = call.ringEndsAt;
+    expect((await repository.listCallRecords()).first.status, 'missed');
+    expect(
+        Sqflite.firstIntValue(await messageDatabase.rawQuery(
+          'SELECT COUNT(*) FROM message_table',
+        )),
+        6);
+    await simulation.cancelCall(call.eventKey);
+    expect(
+        (await repository.listCallRecords()).where(
+          (record) => record.id.startsWith('simulation:'),
+        ),
+        isEmpty);
   });
 }
 

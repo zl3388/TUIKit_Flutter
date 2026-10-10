@@ -3,6 +3,7 @@ import '../domain/repositories.dart';
 import '../domain/wecom_message_models.dart';
 import 'wecom_advanced_message_codec.dart';
 import 'wecom_announcement_repository.dart';
+import 'wecom_local_simulation_repository.dart';
 import 'wecom_message_repository.dart';
 
 class WeComActivityRepository implements ActivityRepository {
@@ -11,15 +12,18 @@ class WeComActivityRepository implements ActivityRepository {
     required WeComMessageRepository messages,
     required ContactRepository contacts,
     WeComAnnouncementRepository? announcements,
+    WeComLocalSimulationRepository? simulation,
   })  : _currentUserId = currentUserId,
         _messages = messages,
         _contacts = contacts,
-        _announcements = announcements;
+        _announcements = announcements,
+        _simulation = simulation;
 
   final int _currentUserId;
   final WeComMessageRepository _messages;
   final ContactRepository _contacts;
   final WeComAnnouncementRepository? _announcements;
+  final WeComLocalSimulationRepository? _simulation;
 
   @override
   Set<ActivityFeature> get features => {
@@ -147,7 +151,7 @@ class WeComActivityRepository implements ActivityRepository {
           ? time
           : right.message.messageId.compareTo(left.message.messageId);
     });
-    return calls
+    final records = calls
         .map(
           (call) => OfflineCallRecord(
             id: call.message.messageId.toString(),
@@ -162,7 +166,24 @@ class WeComActivityRepository implements ActivityRepository {
             status: call.status,
           ),
         )
-        .toList(growable: false);
+        .toList();
+    if (_simulation != null) {
+      final instant = _simulation.now;
+      for (final call in await _simulation.listCalls()) {
+        if (call.scheduledAt.isAfter(instant)) continue;
+        records.add(OfflineCallRecord(
+          id: 'simulation:${call.eventKey}',
+          peerName: _peerName(int.tryParse(call.peerProfileId), contactsById),
+          type: 'voice',
+          direction: 'incoming',
+          startedAt: call.scheduledAt,
+          durationSeconds: 0,
+          status: call.statusAt(instant),
+        ));
+      }
+      records.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    }
+    return List.unmodifiable(records);
   }
 
   @override

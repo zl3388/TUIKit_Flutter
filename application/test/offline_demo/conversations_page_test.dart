@@ -1,13 +1,98 @@
+import 'package:application/src/offline_demo/data/wecom_message_editor.dart';
+import 'package:application/src/offline_demo/data/wecom_message_overlay_repository.dart';
 import 'package:application/src/offline_demo/domain/models.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
 import 'package:application/src/offline_demo/presentation/conversations_page.dart';
 import 'package:application/src/offline_demo/presentation/offline_theme.dart';
 import 'package:application/src/offline_demo/state/offline_demo_store.dart';
+import 'package:application/src/offline_demo/state/admin_access_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('management mode selects a peer for a local message',
+      (tester) async {
+    final adminAccess = AdminAccessController(
+      credentialStore: _MemoryAdminCredentialStore(),
+      buildPin: '0000',
+    );
+    addTearDown(adminAccess.dispose);
+    await adminAccess.initialize();
+    await adminAccess.authenticate('0000');
+    final editor = _RecordingMessageEditor();
+    final store = OfflineDemoStore(OfflineRepositoryBundle(
+      conversationRepository: const _EditableMessageRepository(),
+    ));
+    addTearDown(store.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: ConversationPage(
+        conversation: _conversation,
+        currentProfileId: '1',
+        store: store,
+        messageEditor: editor,
+        adminAccess: adminAccess,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('add-overlay-message')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('overlay-message-sender')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Peer (2)').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('overlay-message-text')),
+      '  以对方身份新增  ',
+    );
+    await tester.tap(find.byKey(const Key('save-overlay-message')));
+    await tester.pumpAndSettle();
+    expect(editor.addedSender, '2');
+    expect(editor.addedText, '  以对方身份新增  ');
+
+    adminAccess.exitAdminMode();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('add-overlay-message')), findsNothing);
+    expect(find.byKey(const Key('overlay-message-actions-1')), findsNothing);
+  });
+
+  testWidgets('requires an explicit sender when current identity is absent',
+      (tester) async {
+    final adminAccess = AdminAccessController(
+      credentialStore: _MemoryAdminCredentialStore(),
+      buildPin: '0000',
+    );
+    addTearDown(adminAccess.dispose);
+    await adminAccess.initialize();
+    await adminAccess.authenticate('0000');
+    final editor = _RecordingMessageEditor();
+    final store = OfflineDemoStore(OfflineRepositoryBundle(
+      conversationRepository: const _EditableMessageRepository(),
+    ));
+    addTearDown(store.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: ConversationPage(
+        conversation: _conversation,
+        currentProfileId: null,
+        store: store,
+        messageEditor: editor,
+        adminAccess: adminAccess,
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('add-overlay-message')));
+    await tester.pumpAndSettle();
+    final save = find.byKey(const Key('save-overlay-message'));
+    expect(tester.widget<FilledButton>(save).onPressed, isNull);
+    await tester.tap(find.byKey(const Key('overlay-message-sender')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Peer (2)').last);
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+  });
+
   testWidgets('read-only message history does not expose a composer',
       (tester) async {
     final store = OfflineDemoStore(
@@ -424,5 +509,56 @@ class _RecordingAttachmentOpener implements AttachmentOpener {
   @override
   Future<void> open(OfflineAttachment attachment) async {
     opened.add(attachment);
+  }
+}
+
+class _EditableMessageRepository extends _ReadOnlyMessageRepository {
+  const _EditableMessageRepository();
+
+  @override
+  Future<List<OfflineConversation>> listConversations() async =>
+      const [_conversation];
+}
+
+class _RecordingMessageEditor implements WeComMessageEditor {
+  String? addedSender;
+  String? addedText;
+
+  @override
+  Future<List<WeComMessageSender>> sendersFor(String conversationId) async =>
+      const [
+        WeComMessageSender(id: '1', displayName: 'Current user'),
+        WeComMessageSender(id: '2', displayName: 'Peer'),
+      ];
+
+  @override
+  Future<WeComMessageOverlayEdit> add({
+    required String conversationId,
+    required String senderId,
+    required String text,
+  }) async {
+    addedSender = senderId;
+    addedText = text;
+    return _FakeMessageEdit();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeMessageEdit implements WeComMessageOverlayEdit {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _MemoryAdminCredentialStore implements AdminCredentialStore {
+  AdminPinCredential? credential;
+
+  @override
+  Future<AdminPinCredential?> load() async => credential;
+
+  @override
+  Future<void> save(AdminPinCredential value) async {
+    credential = value;
   }
 }

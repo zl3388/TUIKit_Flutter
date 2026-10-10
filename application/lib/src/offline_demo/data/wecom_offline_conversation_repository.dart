@@ -11,6 +11,7 @@ import 'wecom_local_simulation_repository.dart';
 import 'wecom_merged_conversation_repository.dart';
 import 'wecom_media_repository.dart';
 import 'wecom_message_content_decoder.dart';
+import 'wecom_message_overlay_repository.dart';
 import 'wecom_message_repository.dart';
 import 'wecom_overlay_command_service.dart';
 import 'wecom_read_state_codec.dart';
@@ -25,12 +26,14 @@ class WeComOfflineConversationRepository implements ConversationRepository {
     required WeComOverlayCommandService commands,
     WeComMediaRepository? media,
     WeComLocalSimulationRepository? simulation,
+    WeComMessageOverlayRepository? messageOverlay,
   })  : _conversations = conversations,
         _messages = messages,
         _contacts = contacts,
         _commands = commands,
         _media = media,
-        _simulation = simulation;
+        _simulation = simulation,
+        _messageOverlay = messageOverlay;
 
   static const _databaseName = 'session.db';
   static const _conversationTable = 'conversation_table';
@@ -43,6 +46,7 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   final WeComOverlayCommandService _commands;
   final WeComMediaRepository? _media;
   final WeComLocalSimulationRepository? _simulation;
+  final WeComMessageOverlayRepository? _messageOverlay;
 
   @override
   bool get isAvailable => true;
@@ -60,6 +64,9 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   @override
   Future<List<OfflineConversation>> listConversations() async {
     final summaries = await _listAllSummaries();
+    final summariesById = {
+      for (final summary in summaries) summary.id: summary,
+    };
     final drafts = await _conversations.listConversationDraftTexts();
     final lastMessages = await _messages.findMessagesById(
       summaries.map((summary) => summary.lastMessageId).whereType<int>(),
@@ -105,6 +112,41 @@ class WeComOfflineConversationRepository implements ConversationRepository {
       );
     }).toList(growable: true)
       ..sort(_compareConversations);
+
+    final touched = await _messageOverlay?.touchedConversations() ?? <String>{};
+    for (var index = 0; index < mapped.length; index++) {
+      final conversation = mapped[index];
+      if (!touched.contains(conversation.id)) continue;
+      final projected = await _listMessagesForSummary(
+        summariesById[conversation.id]!,
+      );
+      final baseLastAt = _unixSeconds(
+        summariesById[conversation.id]!.lastMessageTime,
+      );
+      final eligible = projected.where((message) {
+        if (message.id.startsWith('overlay:')) return true;
+        if (message.progressSource ==
+            OfflineMessageProgressSource.localSimulation) {
+          return baseLastAt == null || message.sentAt.isAfter(baseLastAt);
+        }
+        return baseLastAt != null && !message.sentAt.isAfter(baseLastAt);
+      }).toList(growable: false);
+      final last = eligible.isEmpty ? null : eligible.last;
+      mapped[index] = OfflineConversation(
+        id: conversation.id,
+        type: conversation.type,
+        title: conversation.title,
+        avatarPath: conversation.avatarPath,
+        titleRemark: conversation.titleRemark,
+        lastMessagePreview: last?.text ?? '',
+        lastMessageAt: last?.sentAt,
+        draftText: conversation.draftText,
+        unreadCount: conversation.unreadCount,
+        isPinned: conversation.isPinned,
+        isMuted: conversation.isMuted,
+      );
+    }
+    mapped.sort(_compareConversations);
 
     return List<OfflineConversation>.unmodifiable(mapped);
   }
@@ -169,6 +211,13 @@ class WeComOfflineConversationRepository implements ConversationRepository {
   @override
   Future<List<OfflineMessage>> listMessages(String conversationId) async {
     final summary = await _findSummary(conversationId);
+    return _listMessagesForSummary(summary);
+  }
+
+  Future<List<OfflineMessage>> _listMessagesForSummary(
+    WeComConversationSummary summary,
+  ) async {
+    final conversationId = summary.id;
     final messages = await _messages.listConversationMessages(
       summary.numericId,
     );
@@ -225,6 +274,12 @@ class WeComOfflineConversationRepository implements ConversationRepository {
         peerReaderCount: progress.peerReaderCount,
       );
     }).toList(growable: true);
+    final baseTargetKeys = <String, String>{
+      if (_messageOverlay != null)
+        for (final message in messages)
+          message.messageId.toString():
+              _messageOverlay.targetKeyForBase(message),
+    };
     final simulation = _simulation;
     if (simulation != null) {
       final now = simulation.now;
@@ -236,6 +291,30 @@ class WeComOfflineConversationRepository implements ConversationRepository {
           mapped.add(_simulatedAutomaticReply(exchange, contactsById));
         }
       }
+    }
+    final overlay = _messageOverlay;
+    if (overlay != null) {
+      final senderNames = <String, String>{
+        for (final entry in contactsById.entries)
+          entry.key: entry.value.displayName,
+      };
+      if (conversationId.startsWith('R:')) {
+        final members = await _conversations.listConversationMembers(
+          conversationId,
+        );
+        for (final member in members) {
+          final nickname = _nonEmpty(member.nickname);
+          if (nickname != null) {
+            senderNames[member.userId.toString()] = nickname;
+          }
+        }
+      }
+      return overlay.apply(
+        conversationId: conversationId,
+        messages: mapped,
+        baseTargetKeys: baseTargetKeys,
+        senderNames: senderNames,
+      );
     }
     mapped.sort((left, right) {
       final time = left.sentAt.compareTo(right.sentAt);

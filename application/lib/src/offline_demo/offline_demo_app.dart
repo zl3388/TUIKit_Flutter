@@ -7,7 +7,12 @@ import 'presentation/offline_home.dart';
 import 'presentation/offline_theme.dart';
 
 class OfflineDemoApp extends StatefulWidget {
-  const OfflineDemoApp({super.key});
+  const OfflineDemoApp({
+    this.loadEnvironment = OfflineBootstrap.create,
+    super.key,
+  });
+
+  final Future<OfflineEnvironment> Function() loadEnvironment;
 
   @override
   State<OfflineDemoApp> createState() => _OfflineDemoAppState();
@@ -24,7 +29,7 @@ class _OfflineDemoAppState extends State<OfflineDemoApp> {
   }
 
   Future<OfflineEnvironment> _loadEnvironment() async {
-    final environment = await OfflineBootstrap.create();
+    final environment = await widget.loadEnvironment();
     _resolvedEnvironment = environment;
     return environment;
   }
@@ -66,8 +71,12 @@ class _OfflineDemoAppState extends State<OfflineDemoApp> {
       home: FutureBuilder<OfflineEnvironment>(
         future: _environment,
         builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const _StartupLoading();
+          }
           if (snapshot.hasData) {
             return OfflineHome(
+              key: ObjectKey(snapshot.requireData),
               environment: snapshot.requireData,
               onEnvironmentReload: _reloadEnvironment,
             );

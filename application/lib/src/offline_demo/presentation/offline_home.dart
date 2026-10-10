@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../bootstrap/offline_bootstrap.dart';
+import '../data/wecom_local_simulation_repository.dart';
 import '../state/offline_demo_store.dart';
 import 'admin_console_page.dart';
 import 'contacts_page.dart';
@@ -26,6 +29,12 @@ class OfflineHome extends StatefulWidget {
 class _OfflineHomeState extends State<OfflineHome> with WidgetsBindingObserver {
   var _sectionIndex = 0;
   late final Listenable _changes;
+  Timer? _callTimer;
+  Timer? _ringTimer;
+  final _presentedCalls = <String>{};
+  bool _callDialogOpen = false;
+  bool _inForeground = true;
+  int _callScheduleRevision = 0;
 
   static const _userSections = <_NavigationSection>[
     _NavigationSection('消息', Icons.chat_bubble_outline_rounded),
@@ -44,11 +53,19 @@ class _OfflineHomeState extends State<OfflineHome> with WidgetsBindingObserver {
       widget.environment.adminAccess,
     ]);
     WidgetsBinding.instance.addObserver(this);
+    widget.environment.store.addListener(_scheduleCalls);
+    widget.environment.adminAccess.addListener(_scheduleCalls);
+    _scheduleCalls();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _callScheduleRevision += 1;
+    widget.environment.store.removeListener(_scheduleCalls);
+    widget.environment.adminAccess.removeListener(_scheduleCalls);
+    _callTimer?.cancel();
+    _ringTimer?.cancel();
     super.dispose();
   }
 
@@ -56,11 +73,106 @@ class _OfflineHomeState extends State<OfflineHome> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
+        _inForeground = true;
         widget.environment.adminAccess.resumeFromBackground();
+        _scheduleCalls();
       case AppLifecycleState.hidden || AppLifecycleState.paused:
+        _inForeground = false;
         widget.environment.adminAccess.recordBackgrounded();
       case AppLifecycleState.inactive || AppLifecycleState.detached:
         break;
+    }
+  }
+
+  Future<void> _scheduleCalls() async {
+    _callTimer?.cancel();
+    final revision = ++_callScheduleRevision;
+    final simulation = widget.environment.wecomSimulation;
+    if (simulation == null || !mounted) return;
+    List<WeComSimulatedCall> calls;
+    try {
+      calls = await simulation.listCalls();
+    } catch (_) {
+      if (!mounted || revision != _callScheduleRevision) return;
+      rethrow;
+    }
+    if (!mounted || revision != _callScheduleRevision) return;
+    final instant = simulation.now;
+    DateTime? next;
+    for (final call in calls) {
+      final status = call.statusAt(instant);
+      if (status == 'scheduled') {
+        if (next == null || call.scheduledAt.isBefore(next)) {
+          next = call.scheduledAt;
+        }
+      } else if (status == 'ringing') {
+        if (next == null || call.ringEndsAt.isBefore(next)) {
+          next = call.ringEndsAt;
+        }
+        if (_inForeground &&
+            !widget.environment.adminAccess.isAdmin &&
+            !_callDialogOpen &&
+            !_presentedCalls.contains(call.eventKey)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _showCall(call);
+          });
+        }
+      }
+    }
+    if (next != null) {
+      _callTimer = Timer(next.difference(instant), () async {
+        await widget.environment.store.refreshCallRecords();
+        _scheduleCalls();
+      });
+    }
+  }
+
+  Future<void> _showCall(WeComSimulatedCall call) async {
+    final simulation = widget.environment.wecomSimulation;
+    if (simulation == null ||
+        !_inForeground ||
+        _callDialogOpen ||
+        widget.environment.adminAccess.isAdmin ||
+        _presentedCalls.contains(call.eventKey) ||
+        call.statusAt(simulation.now) != 'ringing') {
+      return;
+    }
+    _presentedCalls.add(call.eventKey);
+    _callDialogOpen = true;
+    final peerName = widget.environment.store.contacts
+            .where((contact) => contact.id == call.peerProfileId)
+            .map((contact) => contact.displayName)
+            .firstOrNull ??
+        call.peerProfileId;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        _ringTimer = Timer(call.ringEndsAt.difference(simulation.now), () {
+          if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+        });
+        return AlertDialog(
+          title: const Text('语音来电'),
+          content: Text(peerName),
+          actions: [
+            FilledButton.tonalIcon(
+              key: const Key('reject-simulated-call'),
+              onPressed: () async {
+                await simulation.rejectCall(call.eventKey);
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              },
+              icon: const Icon(Icons.call_end_rounded),
+              label: const Text('拒绝'),
+            ),
+          ],
+        );
+      },
+    );
+    _ringTimer?.cancel();
+    _callDialogOpen = false;
+    if (mounted) {
+      await widget.environment.store.refreshCallRecords();
+      _scheduleCalls();
     }
   }
 
@@ -83,6 +195,8 @@ class _OfflineHomeState extends State<OfflineHome> with WidgetsBindingObserver {
             store: store,
             conversationEditor:
                 isAdmin ? environment.wecomConversationEditor : null,
+            messageEditor: isAdmin ? environment.wecomMessageEditor : null,
+            adminAccess: environment.adminAccess,
           ),
           ContactsPage(
             contactsAvailable: store.contactsAvailable,

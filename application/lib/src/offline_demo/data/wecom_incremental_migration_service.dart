@@ -166,11 +166,13 @@ class WeComIncrementalMigrationService {
       'JOIN ${WeComOverlaySchema.mergeAttemptsTable} a '
       'ON a.merge_id = c.merge_id '
       'WHERE a.identity_corp_id = ? AND a.identity_user_id = ? '
+      'AND a.scene_id = ? '
       '${mergeId == null ? '' : 'AND c.merge_id = ? '}'
       'ORDER BY c.conflict_id',
       [
         active!.corporationId,
         active.userId,
+        _overlayDatabase.sceneId,
         if (mergeId != null) mergeId,
       ],
     );
@@ -224,13 +226,14 @@ class WeComIncrementalMigrationService {
       WeComOverlaySchema.mergeAttemptsTable,
       where: 'identity_corp_id = ? AND identity_user_id = ? '
           'AND old_dataset_id = ? AND new_dataset_id = ? '
-          'AND source_revision_count = ?',
+          'AND source_revision_count = ? AND scene_id = ?',
       whereArgs: [
         plan.identityScope.corporationId,
         plan.identityScope.userId,
         plan.oldDatasetId,
         plan.newDatasetId,
         plan.sourceRevisionCount,
+        _overlayDatabase.sceneId,
       ],
       limit: 1,
     );
@@ -309,6 +312,7 @@ class WeComIncrementalMigrationService {
         WeComOverlaySchema.operationsTable,
         {
           'dataset_id': plan.newDatasetId,
+          'scene_id': _overlayDatabase.sceneId,
           'identity_corp_id': plan.identityScope.corporationId,
           'identity_user_id': plan.identityScope.userId,
           'database_name': operation.databaseName,
@@ -339,6 +343,7 @@ class WeComIncrementalMigrationService {
       {
         'previous_dataset_id': plan.oldDatasetId,
         'dataset_id': plan.newDatasetId,
+        'scene_id': _overlayDatabase.sceneId,
         'merge_id': mergeId,
         'current_corp_id': activeActivation.corporationId,
         'current_user_id': activeActivation.userId,
@@ -370,6 +375,7 @@ class WeComIncrementalMigrationService {
       WeComOverlaySchema.mergeAttemptsTable,
       {
         'old_dataset_id': plan.oldDatasetId,
+        'scene_id': _overlayDatabase.sceneId,
         'new_dataset_id': plan.newDatasetId,
         'identity_corp_id': plan.identityScope.corporationId,
         'identity_user_id': plan.identityScope.userId,
@@ -480,11 +486,12 @@ class WeComIncrementalMigrationService {
           await executor.rawQuery(
             'SELECT COUNT(*) FROM ${WeComOverlaySchema.operationsTable} '
             'WHERE dataset_id = ? AND identity_corp_id = ? '
-            'AND identity_user_id = ?',
+            'AND identity_user_id = ? AND scene_id = ?',
             [
               datasetId,
               identityScope.corporationId,
               identityScope.userId,
+              _overlayDatabase.sceneId,
             ],
           ),
         ) ??
@@ -500,12 +507,18 @@ class WeComIncrementalMigrationService {
   ) async {
     final rows = await executor.query(
       WeComOverlaySchema.datasetActivationsTable,
-      columns: ['dataset_id', 'current_corp_id', 'current_user_id'],
+      columns: ['dataset_id', 'current_corp_id', 'current_user_id', 'scene_id'],
       orderBy: 'activation_id DESC',
       limit: 1,
     );
     if (rows.isEmpty) {
       return null;
+    }
+    if (rows.single['scene_id'] != _overlayDatabase.sceneId) {
+      throw const WeComIncrementalMigrationException(
+        WeComIncrementalMigrationIssueCode.activeDatasetMismatch,
+        'Active scene changed during incremental migration',
+      );
     }
     final datasetId = rows.single['dataset_id'];
     final corporationId = rows.single['current_corp_id'];

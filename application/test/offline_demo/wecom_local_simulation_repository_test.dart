@@ -151,6 +151,49 @@ void main() {
       throwsA(isA<DatabaseException>()),
     );
   });
+
+  test('schedules a call across restart, scopes it, and cancels it', () async {
+    final first = _repository(database, () => now);
+    final scheduledAt = now.add(const Duration(minutes: 2));
+    final call = await first.scheduleCall(
+      peerProfileId: '2',
+      scheduledAt: scheduledAt,
+    );
+    final reopened = _repository(database, () => now);
+    final other = WeComLocalSimulationRepository(
+      overlayDatabase: database,
+      identityScope: const WeComIdentityScope(corporationId: 200, userId: 2),
+      now: () => now,
+    );
+
+    expect((await reopened.listCalls()).single.eventKey, call.eventKey);
+    expect(await other.listCalls(), isEmpty);
+    expect(call.statusAt(now), 'scheduled');
+    now = scheduledAt;
+    expect((await reopened.listCalls()).single.statusAt(now), 'ringing');
+    now = scheduledAt.add(const Duration(seconds: 20));
+    expect((await reopened.listCalls()).single.statusAt(now), 'missed');
+    await expectLater(other.cancelCall(call.eventKey), throwsStateError);
+    await reopened.cancelCall(call.eventKey);
+    expect(await first.listCalls(), isEmpty);
+    expect(await database.connection.query(WeComOverlaySchema.operationsTable),
+        isEmpty);
+  });
+
+  test('rejects a ringing call with an append-only result', () async {
+    final repository = _repository(database, () => now);
+    final call = await repository.scheduleCall(
+      peerProfileId: '2',
+      scheduledAt: now.add(const Duration(seconds: 5)),
+    );
+    now = now.add(const Duration(seconds: 6));
+    await repository.rejectCall(call.eventKey);
+    final restored =
+        (await _repository(database, () => now).listCalls()).single;
+    expect(restored.statusAt(now), 'rejected');
+    await expectLater(repository.cancelCall(call.eventKey),
+        throwsA(isA<DatabaseException>()));
+  });
 }
 
 WeComLocalSimulationRepository _repository(

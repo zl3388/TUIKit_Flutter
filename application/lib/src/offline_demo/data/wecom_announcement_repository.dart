@@ -47,11 +47,13 @@ class WeComAnnouncementRepository {
       WeComOverlaySchema.operationsTable,
       columns: const ['row_key_json', 'operation', 'values_json'],
       where: 'dataset_id = ? AND identity_corp_id = ? '
-          'AND identity_user_id = ? AND database_name = ? AND table_name = ?',
+          'AND identity_user_id = ? AND scene_id = ? '
+          'AND database_name = ? AND table_name = ?',
       whereArgs: [
         datasetId,
         identityScope.corporationId,
         identityScope.userId,
+        _overlayDatabase.sceneId,
         databaseName,
         tableName,
       ],

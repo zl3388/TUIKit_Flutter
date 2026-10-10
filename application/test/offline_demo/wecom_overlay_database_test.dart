@@ -45,6 +45,21 @@ void main() {
     expect(indexNames, WeComOverlaySchema.expectedIndexes);
     expect(triggerNames, WeComOverlaySchema.expectedTriggers);
     expect(
+      await _columnNames(database, WeComOverlaySchema.messageEditsTable),
+      [
+        'edit_id',
+        'identity_corp_id',
+        'identity_user_id',
+        'conversation_id',
+        'target_key',
+        'action',
+        'state_json',
+        'reverts_edit_id',
+        'created_at_micros',
+        'scene_id',
+      ],
+    );
+    expect(
       columns.map((row) => row['name']),
       [
         'revision_id',
@@ -59,6 +74,7 @@ void main() {
         'created_at_micros',
         'identity_corp_id',
         'identity_user_id',
+        'scene_id',
       ],
     );
     expect(
@@ -75,6 +91,7 @@ void main() {
         'created_at_micros',
         'identity_corp_id',
         'identity_user_id',
+        'scene_id',
       ],
     );
     expect(
@@ -106,6 +123,7 @@ void main() {
         'current_corp_id',
         'current_user_id',
         'created_at_micros',
+        'scene_id',
       ],
     );
     expect(
@@ -119,6 +137,7 @@ void main() {
         'payload_json',
         'reverts_event_id',
         'created_at_micros',
+        'scene_id',
       ],
     );
     expect(await database.connection.getVersion(), WeComOverlaySchema.version);
@@ -643,6 +662,114 @@ void main() {
     expect(activations.last['merge_id'], isNull);
   });
 
+  test('upgrades version 6 without losing text simulation events', () async {
+    final rawDatabase = await _openVersion6Database(databasePath);
+    final textEventId =
+        await rawDatabase.insert(WeComOverlaySchema.simulationEventsTable, {
+      'identity_corp_id': 100,
+      'identity_user_id': 1,
+      'event_key': 'old-text',
+      'event_type': 'textExchange',
+      'payload_json': '{"version":1}',
+      'created_at_micros': 1,
+    });
+    await rawDatabase.insert(WeComOverlaySchema.simulationEventsTable, {
+      'identity_corp_id': 100,
+      'identity_user_id': 1,
+      'event_key': 'old-text-cancel',
+      'event_type': 'cancelExchange',
+      'payload_json': '{"version":1}',
+      'reverts_event_id': textEventId,
+      'created_at_micros': 2,
+    });
+    await rawDatabase.close();
+
+    final database = await WeComOverlayDatabase.open(
+      factory: databaseFactoryFfi,
+      databasePath: databasePath,
+    );
+    addTearDown(database.close);
+    final events = await database.connection.query(
+      WeComOverlaySchema.simulationEventsTable,
+      orderBy: 'event_id',
+    );
+    expect(events.map((event) => event['event_key']),
+        ['old-text', 'old-text-cancel']);
+    expect(
+      Sqflite.firstIntValue(
+        await database.connection.rawQuery('PRAGMA foreign_keys'),
+      ),
+      1,
+    );
+    await database.connection.insert(WeComOverlaySchema.simulationEventsTable, {
+      'identity_corp_id': 100,
+      'identity_user_id': 1,
+      'event_key': 'new-call',
+      'event_type': 'scheduledCall',
+      'payload_json': '{"version":1}',
+      'created_at_micros': 2,
+    });
+    expect(await database.connection.getVersion(), WeComOverlaySchema.version);
+  });
+
+  test('version 8 upgrade retains all log IDs in the default scene', () async {
+    final old = await databaseFactoryFfi.openDatabase(databasePath,
+        options: OpenDatabaseOptions(
+          version: 8,
+          singleInstance: false,
+          onCreate: (db, _) async {
+            for (final sql in WeComOverlaySchema.createStatements.take(
+                WeComOverlaySchema.createStatements.length -
+                    WeComOverlaySchema.version9UpgradeStatements.length)) {
+              await db.execute(sql);
+            }
+          },
+        ));
+    final activation =
+        await old.insert(WeComOverlaySchema.datasetActivationsTable, {
+      'dataset_id': datasetId,
+      'current_corp_id': 100,
+      'current_user_id': 1,
+      'created_at_micros': 1,
+    });
+    final edit = await old.insert(WeComOverlaySchema.messageEditsTable, {
+      'identity_corp_id': 100,
+      'identity_user_id': 1,
+      'conversation_id': 'R:1',
+      'target_key': 'overlay:1',
+      'action': 'add',
+      'state_json': '{"mode":"text"}',
+      'created_at_micros': 1,
+    });
+    final undo = await old.insert(WeComOverlaySchema.messageEditsTable, {
+      'identity_corp_id': 100,
+      'identity_user_id': 1,
+      'conversation_id': 'R:1',
+      'target_key': 'overlay:1',
+      'action': 'undo',
+      'state_json': '{"mode":"hidden"}',
+      'reverts_edit_id': edit,
+      'created_at_micros': 2,
+    });
+    await old.close();
+    final database = await WeComOverlayDatabase.open(
+        factory: databaseFactoryFfi, databasePath: databasePath);
+    addTearDown(database.close);
+    expect(database.sceneId, 'default');
+    final edits = await database.connection
+        .query(WeComOverlaySchema.messageEditsTable, orderBy: 'edit_id');
+    expect(edits.map((row) => row['edit_id']), [edit, undo]);
+    expect(edits.map((row) => row['scene_id']), ['default', 'default']);
+    expect(edits.last['reverts_edit_id'], edit);
+    final active = (await database.connection
+            .query(WeComOverlaySchema.datasetActivationsTable))
+        .single;
+    expect(active['activation_id'], activation);
+    expect(active['scene_id'], 'default');
+    expect(await database.connection.rawQuery('PRAGMA foreign_key_check'),
+        isEmpty);
+  });
+
   test('does not assign ambiguous version 3 operations to an identity',
       () async {
     final rawDatabase = await _openVersion3Database(databasePath);
@@ -821,6 +948,28 @@ Future<Database> _openVersion5Database(String databasePath) {
           await database.execute(statement);
         }
         for (final statement in WeComOverlaySchema.version5UpgradeStatements) {
+          await database.execute(statement);
+        }
+      },
+    ),
+  );
+}
+
+Future<Database> _openVersion6Database(String databasePath) {
+  return databaseFactoryFfi.openDatabase(
+    databasePath,
+    options: OpenDatabaseOptions(
+      version: 6,
+      singleInstance: false,
+      onCreate: (database, version) async {
+        for (final statement in [
+          ...WeComOverlaySchema.version1CreateStatements,
+          ...WeComOverlaySchema.version2CreateStatements,
+          ...WeComOverlaySchema.version3UpgradeStatements,
+          ...WeComOverlaySchema.version4UpgradeStatements,
+          ...WeComOverlaySchema.version5UpgradeStatements,
+          ...WeComOverlaySchema.version6UpgradeStatements,
+        ]) {
           await database.execute(statement);
         }
       },
