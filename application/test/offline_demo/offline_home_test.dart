@@ -6,9 +6,11 @@ import 'package:application/src/offline_demo/data/local_media_store.dart';
 import 'package:application/src/offline_demo/data/wecom_active_dataset_runtime.dart';
 import 'package:application/src/offline_demo/data/wecom_data_source_service.dart';
 import 'package:application/src/offline_demo/data/wecom_database_package.dart';
+import 'package:application/src/offline_demo/data/wecom_database_package_exporter.dart';
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
+import 'package:application/src/offline_demo/data/wecom_restricted_export_service.dart';
 import 'package:application/src/offline_demo/data/wecom_source_directory_access.dart';
 import 'package:application/src/offline_demo/domain/models.dart';
 import 'package:application/src/offline_demo/domain/repositories.dart';
@@ -232,6 +234,73 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('restricted export confirms its scope and handles save results',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final export = _ControlledExport();
+    final fixture = (await tester
+        .runAsync(() => _HomeFixture.create(restrictedExport: export)))!;
+    addTearDown(fixture.close);
+    await fixture.environment.adminAccess.setupPin('0000');
+    await tester.pumpWidget(MaterialApp(
+      theme: OfflineTheme.light,
+      home: OfflineHome(
+          environment: fixture.environment, onEnvironmentReload: () async {}),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('管理').last);
+    await tester.pumpAndSettle();
+    final entry = find.byKey(const Key('export-restricted-copy'));
+    await tester.scrollUntilVisible(entry, 300,
+        scrollable: find.byType(Scrollable).last);
+    await tester.ensureVisible(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('不等于场景备份'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(export.calls, 0);
+
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-restricted-export')));
+    await tester.pump();
+    expect(export.calls, 1);
+    expect(tester.widget<ListTile>(entry).enabled, isFalse);
+    export.result.complete(3);
+    await tester.pumpAndSettle();
+    expect(find.text('数据库副本已保存，应用 3 条字段修订'), findsOneWidget);
+    expect(tester.widget<ListTile>(entry).enabled, isTrue);
+
+    export.result = Completer<int?>();
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-restricted-export')));
+    await tester.pump();
+    export.result.completeError(StateError('expired session'));
+    await tester.pumpAndSettle();
+    expect(find.text('管理会话或活动场景已改变，请重新进入管理模式后重试'), findsOneWidget);
+    expect(tester.widget<ListTile>(entry).enabled, isTrue);
+
+    export.result = Completer<int?>();
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-restricted-export')));
+    await tester.pump();
+    export.result.completeError(const WeComExportException(
+      WeComExportIssueCode.unsupportedTarget,
+      'Uncertified department membership revision',
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('当前场景含尚未认证的字段修订，无法导出数据库副本'), findsOneWidget);
+    expect(tester.widget<ListTile>(entry).enabled, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('shows a scheduled incoming call when its local time arrives',
       (tester) async {
     var now = DateTime.utc(2026, 9, 29, 8);
@@ -295,6 +364,7 @@ class _HomeFixture {
   static Future<_HomeFixture> create({
     bool identityAvailable = true,
     DateTime Function()? simulationNow,
+    WeComRestrictedExportService? restrictedExport,
   }) async {
     final root = await Directory.systemTemp.createTemp('tui_offline_home_');
     final mediaRoot = Directory(p.join(root.path, 'media'));
@@ -353,6 +423,7 @@ class _HomeFixture {
       wecomDataSources: const _UnavailableDataSourceManager(),
       wecomSourceDirectories: const _UnavailableSourceDirectoryAccess(),
       wecomSimulation: simulation,
+      wecomRestrictedExport: restrictedExport,
     );
     return _HomeFixture(
       environment: environment,
@@ -365,6 +436,17 @@ class _HomeFixture {
     environment.store.dispose();
     await environment.close();
     await root.delete(recursive: true);
+  }
+}
+
+class _ControlledExport implements WeComRestrictedExportService {
+  var calls = 0;
+  var result = Completer<int?>();
+
+  @override
+  Future<int?> export() {
+    calls++;
+    return result.future;
   }
 }
 

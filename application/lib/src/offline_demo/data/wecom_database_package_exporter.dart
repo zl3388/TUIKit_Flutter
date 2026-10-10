@@ -291,6 +291,12 @@ class WeComDatabasePackageExporter {
           for (final operation in entry.value) {
             await _applyOperation(transaction, operation);
           }
+          final schema = _contract.databases
+              .singleWhere((item) => item.fileName == entry.key);
+          if (!schema.tables.containsKey('android_metadata')) {
+            // Android adds its locale table when opening a writable copy.
+            await transaction.execute('DROP TABLE IF EXISTS android_metadata');
+          }
         });
       } catch (error) {
         throw WeComExportException(

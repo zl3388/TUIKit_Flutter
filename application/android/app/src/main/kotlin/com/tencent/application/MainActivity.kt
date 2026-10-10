@@ -20,16 +20,86 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "offline_demo/source_directory"
         private const val PICK_DIRECTORY_REQUEST = 0x5701
+        private const val PICK_EXPORT_REQUEST = 0x5702
     }
 
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingDirectoryResult: MethodChannel.Result? = null
+    private var pendingExportResult: MethodChannel.Result? = null
+    private var exportUri: Uri? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler(::handleSourceDirectoryCall)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "offline_demo/export_file")
+            .setMethodCallHandler(::handleExportCall)
+    }
+
+    private fun handleExportCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "choose" -> {
+                if (pendingExportResult != null || exportUri != null) {
+                    result.error("picker_active", "An export is already active", null)
+                    return
+                }
+                val name = call.argument<String>("fileName") ?: "wecom-copy.zip"
+                pendingExportResult = result
+                try {
+                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "application/zip"
+                        putExtra(Intent.EXTRA_TITLE, name)
+                        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    }, PICK_EXPORT_REQUEST)
+                } catch (error: Exception) {
+                    pendingExportResult = null
+                    result.error("picker_failed", error.message, null)
+                }
+            }
+            "write", "discard" -> {
+                val uri = exportUri
+                if (uri == null || uri.toString() != call.argument<String>("uri")) {
+                    result.error("invalid_export", "No matching export destination", null)
+                    return
+                }
+                val sourcePath = call.argument<String>("path")
+                ioExecutor.execute {
+                    try {
+                        if (call.method == "write") {
+                            val source = File(sourcePath ?: "").canonicalFile
+                            val roots = listOf(cacheDir, codeCacheDir).map {
+                                File(it, "offline_exports").canonicalFile
+                            }
+                            if (roots.none { source.path.startsWith(it.path + File.separator) } ||
+                                !source.isFile || source.extension != "zip") {
+                                throw IOException("Export must be a prepared private ZIP file")
+                            }
+                            contentResolver.openOutputStream(uri, "w")?.use { output ->
+                                source.inputStream().use { it.copyTo(output) }
+                            } ?: throw IOException("Export destination cannot be written")
+                        } else {
+                            if (!DocumentsContract.deleteDocument(contentResolver, uri)) {
+                                throw IOException("Incomplete export could not be removed")
+                            }
+                        }
+                        mainHandler.post {
+                            exportUri = null
+                            result.success(null)
+                        }
+                    } catch (error: Exception) {
+                        mainHandler.post {
+                            // A failed write can still be discarded; a failed discard
+                            // must not prevent the next export from opening its picker.
+                            if (call.method == "discard") exportUri = null
+                            result.error("export_failed", error.message, null)
+                        }
+                    }
+                }
+            }
+            else -> result.notImplemented()
+        }
     }
 
     private fun handleSourceDirectoryCall(call: MethodCall, result: MethodChannel.Result) {
@@ -61,6 +131,13 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == PICK_EXPORT_REQUEST) {
+            val result = pendingExportResult
+            pendingExportResult = null
+            exportUri = if (resultCode == Activity.RESULT_OK) data?.data else null
+            result?.success(exportUri?.toString())
+            return
+        }
         if (requestCode != PICK_DIRECTORY_REQUEST) {
             super.onActivityResult(requestCode, resultCode, data)
             return

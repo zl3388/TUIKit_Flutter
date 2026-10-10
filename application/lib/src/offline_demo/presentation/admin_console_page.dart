@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../bootstrap/offline_bootstrap.dart';
 import '../data/wecom_data_source_service.dart';
 import '../data/wecom_database_package.dart';
+import '../data/wecom_database_package_exporter.dart';
 import '../data/wecom_identity_repository.dart';
 import '../data/wecom_overlay_schema.dart';
 import 'admin_conversation_batch_page.dart';
@@ -261,6 +262,18 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
                 title: const Text('刷新当前源目录'),
                 trailing: const Icon(Icons.chevron_right_rounded),
               ),
+              const Divider(height: 1),
+              ListTile(
+                key: const Key('export-restricted-copy'),
+                enabled:
+                    !_processing && environment.wecomRestrictedExport != null,
+                onTap: _processing || environment.wecomRestrictedExport == null
+                    ? null
+                    : _exportRestrictedCopy,
+                leading: const Icon(Icons.download_outlined),
+                title: const Text('导出受限数据库副本'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+              ),
             ],
           ),
         ),
@@ -377,6 +390,53 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
       if (mounted) {
         _showError(error);
       }
+    }
+  }
+
+  Future<void> _exportRestrictedCopy() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导出受限数据库副本'),
+        content: const Text('仅包含基础数据库和当前场景已认证的字段修订。'
+            '消息编辑、公告编辑、模拟、媒体和密钥不包含在内。'
+            '该副本不等于场景备份，也尚未通过真实 WeCom 客户端读回验证。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消')),
+          FilledButton(
+              key: const Key('confirm-restricted-export'),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('继续导出')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _processing = true);
+    try {
+      final count = await widget.environment.wecomRestrictedExport!.export();
+      if (mounted && count != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('数据库副本已保存，应用 $count 条字段修订')),
+        );
+      }
+    } catch (error) {
+      debugPrint('Restricted export failed: $error');
+      if (mounted) {
+        final message = switch (error) {
+          StateError() => '管理会话或活动场景已改变，请重新进入管理模式后重试',
+          WeComExportException(code: WeComExportIssueCode.unsupportedTarget) =>
+            '当前场景含尚未认证的字段修订，无法导出数据库副本',
+          WeComExportException() => '数据库副本校验失败，未导出',
+          _ => '保存失败，请检查目标位置的可用空间和写入权限后重试',
+        };
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(message)));
+      }
+    } finally {
+      if (mounted) setState(() => _processing = false);
     }
   }
 

@@ -14,6 +14,7 @@ import '../data/wecom_contact_repository.dart';
 import '../data/wecom_conversation_editor.dart';
 import '../data/wecom_data_source_service.dart';
 import '../data/wecom_database_package.dart';
+import '../data/wecom_database_package_exporter.dart';
 import '../data/wecom_directory_editor.dart';
 import '../data/wecom_incremental_merge_planner.dart';
 import '../data/wecom_incremental_migration_service.dart';
@@ -24,6 +25,7 @@ import '../data/wecom_message_overlay_repository.dart';
 import '../data/wecom_offline_conversation_repository.dart';
 import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
+import '../data/wecom_restricted_export_service.dart';
 import '../data/wecom_scene_service.dart';
 import '../data/wecom_source_directory_access.dart';
 import '../domain/repositories.dart';
@@ -47,6 +49,7 @@ class OfflineEnvironment {
     this.wecomSimulation,
     this.wecomRuntime,
     this.wecomScenes,
+    this.wecomRestrictedExport,
   });
 
   final LocalMediaStore mediaStore;
@@ -64,6 +67,7 @@ class OfflineEnvironment {
   final WeComLocalSimulationRepository? wecomSimulation;
   final WeComActiveDatasetRuntime? wecomRuntime;
   final WeComSceneService? wecomScenes;
+  final WeComRestrictedExportService? wecomRestrictedExport;
 
   bool _closed = false;
 
@@ -167,6 +171,7 @@ abstract final class OfflineBootstrap {
       WeComAnnouncementEditor? announcementEditor;
       WeComLocalSimulationRepository? simulation;
       WeComSceneService? scenes;
+      WeComRestrictedExportService? restrictedExport;
       try {
         runtime = await resolver.openActive();
         scenes = WeComSceneService(
@@ -177,6 +182,18 @@ abstract final class OfflineBootstrap {
           canEdit: () => adminAccess!.isAdmin,
         );
         await scenes.ensureDefaultScene();
+        restrictedExport = WeComRestrictedExportService(
+          exporter: WeComDatabasePackageExporter(
+            contract: contract,
+            databaseFactory: resolvedFactory,
+          ),
+          basePackage: runtime.package,
+          overlayDatabase: overlayDatabase,
+          identityScope: runtime.identity.identity.scope,
+          scratchRoot:
+              Directory(p.join(Directory.systemTemp.path, 'offline_exports')),
+          canExport: () => adminAccess!.isAdmin,
+        );
         final commands = WeComOverlayCommandService(
           overlayDatabase: overlayDatabase,
           contract: contract,
@@ -276,6 +293,7 @@ abstract final class OfflineBootstrap {
         wecomSimulation: simulation,
         wecomRuntime: runtime,
         wecomScenes: scenes,
+        wecomRestrictedExport: restrictedExport,
       );
     } catch (_) {
       try {
