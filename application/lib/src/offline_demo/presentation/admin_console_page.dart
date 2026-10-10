@@ -213,6 +213,7 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
                     MaterialPageRoute<void>(
                         builder: (_) => AdminScenesPage(
                               scenes: environment.wecomScenes!,
+                              packages: environment.wecomScenePackages,
                               onEnvironmentReload: widget.onEnvironmentReload,
                             )),
                   ),

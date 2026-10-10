@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:application/src/offline_demo/data/wecom_scene_service.dart';
+import 'package:application/src/offline_demo/data/wecom_scene_package.dart';
+import 'package:application/src/offline_demo/data/wecom_scene_package_transfer.dart';
 import 'package:application/src/offline_demo/presentation/admin_scenes_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,7 +15,8 @@ void main() {
     reloads = 0;
   });
 
-  Future<void> open(WidgetTester tester) async {
+  Future<void> open(WidgetTester tester,
+      {WeComScenePackageTransfer? packages}) async {
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -22,6 +27,7 @@ void main() {
         onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
           builder: (_) => AdminScenesPage(
             scenes: scenes,
+            packages: packages,
             onEnvironmentReload: () async {
               reloads++;
             },
@@ -92,6 +98,82 @@ void main() {
     expect(find.text('场景与快照'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('scene package export confirms scope and disables busy controls',
+      (tester) async {
+    final packages = _Packages();
+    await open(tester, packages: packages);
+    final entry = find.byKey(const Key('export-scene-package'));
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('不包含基础数据库'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(packages.exports, 0);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-export-scene-package')));
+    await tester.pump();
+    expect(tester.widget<ListTile>(entry).enabled, isFalse);
+    expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('create-scene')))
+            .onPressed,
+        isNull);
+    packages.saved.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.text('项目场景包已保存'), findsOneWidget);
+    expect(reloads, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'scene package import stays on the list and reports specific failures',
+      (tester) async {
+    final packages = _Packages();
+    await open(tester, packages: packages);
+    final entry = find.byKey(const Key('import-scene-package'));
+    await tester.tap(entry);
+    await tester.pump();
+    final item = _Scenes._item('imported', 'Imported');
+    scenes.items.add(item);
+    packages.loaded.complete(item);
+    await tester.pumpAndSettle();
+    expect(find.text('Imported'), findsOneWidget);
+    expect(find.text('场景包已导入：Imported'), findsOneWidget);
+    expect(reloads, 0);
+    for (final issue in WeComScenePackageIssue.values) {
+      packages.loaded = Completer<WeComOverlayScene?>();
+      await tester.tap(entry);
+      await tester.pump();
+      packages.loaded.completeError(WeComScenePackageException(issue));
+      await tester.pumpAndSettle();
+      expect(
+          find.textContaining(switch (issue) {
+            WeComScenePackageIssue.identity => '身份不匹配',
+            WeComScenePackageIssue.dataset => '基础数据集不匹配',
+            WeComScenePackageIssue.unsupportedVersion => '版本不受支持',
+            WeComScenePackageIssue.invalid => '包含无效修订',
+          }),
+          findsOneWidget);
+      expect(tester.widget<ListTile>(entry).enabled, isTrue);
+    }
+    expect(tester.takeException(), isNull);
+  });
+}
+
+class _Packages implements WeComScenePackageTransfer {
+  var exports = 0;
+  final saved = Completer<bool>();
+  var loaded = Completer<WeComOverlayScene?>();
+  @override
+  Future<bool> export() {
+    exports++;
+    return saved.future;
+  }
+
+  @override
+  Future<WeComOverlayScene?> import() => loaded.future;
 }
 
 class _Scenes implements WeComSceneService {

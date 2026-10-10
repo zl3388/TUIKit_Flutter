@@ -49,7 +49,7 @@ class MainActivity : FlutterActivity() {
                 try {
                     startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
-                        type = "application/zip"
+                        type = if (name.endsWith(".json")) "application/json" else "application/zip"
                         putExtra(Intent.EXTRA_TITLE, name)
                         addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     }, PICK_EXPORT_REQUEST)
@@ -73,8 +73,8 @@ class MainActivity : FlutterActivity() {
                                 File(it, "offline_exports").canonicalFile
                             }
                             if (roots.none { source.path.startsWith(it.path + File.separator) } ||
-                                !source.isFile || source.extension != "zip") {
-                                throw IOException("Export must be a prepared private ZIP file")
+                                !source.isFile || source.extension !in setOf("zip", "json")) {
+                                throw IOException("Export must be a prepared private file")
                             }
                             contentResolver.openOutputStream(uri, "w")?.use { output ->
                                 source.inputStream().use { it.copyTo(output) }

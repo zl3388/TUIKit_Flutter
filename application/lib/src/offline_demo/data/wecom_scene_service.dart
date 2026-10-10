@@ -3,9 +3,11 @@ import 'dart:math';
 import 'package:sqflite/sqflite.dart';
 
 import 'wecom_active_dataset_runtime.dart';
+import 'wecom_database_package.dart';
 import 'wecom_identity_repository.dart';
 import 'wecom_overlay_database.dart';
 import 'wecom_overlay_schema.dart';
+import 'wecom_scene_package.dart';
 
 class WeComOverlayScene {
   const WeComOverlayScene({
@@ -28,21 +30,85 @@ class WeComSceneService {
     required WeComOverlayDatabase overlayDatabase,
     required WeComActiveDatasetResolver datasetResolver,
     required WeComIdentityScope identityScope,
+    required WeComPackageContract contract,
     required this.datasetId,
     required bool Function() canEdit,
   })  : _overlay = overlayDatabase,
         _resolver = datasetResolver,
         _scope = identityScope,
+        _contract = contract,
         _canEdit = canEdit;
 
   final WeComOverlayDatabase _overlay;
   final WeComActiveDatasetResolver _resolver;
   final WeComIdentityScope _scope;
+  final WeComPackageContract _contract;
   final String datasetId;
   final bool Function() _canEdit;
   final _random = Random.secure();
 
   String get activeSceneId => _overlay.sceneId;
+
+  Future<void> validateAccess() async {
+    _requireAdmin();
+    await _requireActive(_overlay.connection);
+    _requireAdmin();
+  }
+
+  Future<String> exportPackage() async {
+    await validateAccess();
+    await _validateBase(datasetId);
+    return _overlay.connection.transaction((txn) async {
+      _requireAdmin();
+      await _requireActive(txn);
+      final scenes = await txn.query(WeComOverlaySchema.scenesTable,
+          where:
+              'scene_id = ? AND identity_corp_id = ? AND identity_user_id = ?',
+          whereArgs: [activeSceneId, _scope.corporationId, _scope.userId]);
+      if (scenes.length != 1) throw StateError('Active scene is missing.');
+      final logs = <String, List<Map<String, Object?>>>{};
+      for (final log in WeComScenePackage.logTypes) {
+        logs[log.table] = await txn.query(log.table,
+            columns: log.columns,
+            where:
+                'identity_corp_id = ? AND identity_user_id = ? AND scene_id = ?',
+            whereArgs: [_scope.corporationId, _scope.userId, activeSceneId],
+            orderBy: log.id);
+      }
+      _requireAdmin();
+      return WeComScenePackage.encode(
+          name: scenes.single['name']! as String,
+          datasetId: datasetId,
+          scope: _scope,
+          logs: logs,
+          contract: _contract);
+    });
+  }
+
+  Future<WeComOverlayScene> importPackage(String text) async {
+    await validateAccess();
+    final package = WeComScenePackage.decode(text, _contract);
+    if (package.scope.corporationId != _scope.corporationId ||
+        package.scope.userId != _scope.userId) {
+      throw const WeComScenePackageException(WeComScenePackageIssue.identity);
+    }
+    if (package.datasetId != datasetId) {
+      throw const WeComScenePackageException(WeComScenePackageIssue.dataset);
+    }
+    await _validateBase(datasetId);
+    return _overlay.connection.transaction((txn) async {
+      _requireAdmin();
+      await _requireActive(txn);
+      final id = _newId();
+      for (final log in WeComScenePackage.logTypes) {
+        await _appendLogs(txn, log, package.logs[log.table]!, id);
+      }
+      _requireAdmin();
+      final metadata = _metadata(id, package.name, datasetId, false);
+      await txn.insert(WeComOverlaySchema.scenesTable, metadata);
+      return _decode({...metadata, 'latest_dataset': datasetId});
+    });
+  }
 
   Future<void> ensureDefaultScene() async {
     await _overlay.connection.insert(
@@ -154,40 +220,35 @@ class WeComSceneService {
 
   Future<void> _copyLogs(Transaction txn, String source, String target) async {
     // Preserve logical message keys, but remap revision references to the copy.
-    for (final log in [
-      (
-        WeComOverlaySchema.operationsTable,
-        'revision_id',
-        'reverts_revision_id'
-      ),
-      (
-        WeComOverlaySchema.simulationEventsTable,
-        'event_id',
-        'reverts_event_id'
-      ),
-      (WeComOverlaySchema.messageEditsTable, 'edit_id', 'reverts_edit_id'),
-    ]) {
+    for (final log in WeComScenePackage.logTypes) {
       final rows = await txn.query(
-        log.$1,
+        log.table,
         where: 'identity_corp_id = ? AND identity_user_id = ? AND scene_id = ?',
         whereArgs: [_scope.corporationId, _scope.userId, source],
-        orderBy: log.$2,
+        orderBy: log.id,
       );
-      final ids = <int, int>{};
-      for (final row in rows) {
-        final values = Map<String, Object?>.from(row);
-        final oldId = values.remove(log.$2)! as int;
-        final revertedId = values[log.$3] as int?;
-        if (revertedId != null) {
-          final copiedId = ids[revertedId];
-          if (copiedId == null) {
-            throw StateError('Scene revision reference is invalid.');
-          }
-          values[log.$3] = copiedId;
+      await _appendLogs(txn, log, rows, target);
+    }
+  }
+
+  Future<void> _appendLogs(Transaction txn, WeComSceneLog log,
+      List<Map<String, Object?>> rows, String target) async {
+    final ids = <int, int>{};
+    for (final row in rows) {
+      final values = Map<String, Object?>.from(row);
+      final oldId = values.remove(log.id)! as int;
+      final revertedId = values[log.revert] as int?;
+      if (revertedId != null) {
+        final copiedId = ids[revertedId];
+        if (copiedId == null) {
+          throw StateError('Scene revision reference is invalid.');
         }
-        values['scene_id'] = target;
-        ids[oldId] = await txn.insert(log.$1, values);
+        values[log.revert] = copiedId;
       }
+      values['scene_id'] = target;
+      values['identity_corp_id'] = _scope.corporationId;
+      values['identity_user_id'] = _scope.userId;
+      ids[oldId] = await txn.insert(log.table, values);
     }
   }
 

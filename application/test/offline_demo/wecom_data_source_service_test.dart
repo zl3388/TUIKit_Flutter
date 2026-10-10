@@ -108,6 +108,7 @@ void main() {
         overlayDatabase: overlay.forScene(id),
         datasetResolver: datasetResolver,
         identityScope: const WeComIdentityScope(corporationId: 100, userId: 1),
+        contract: contract,
         datasetId: datasetId,
         canEdit: () => true,
       );

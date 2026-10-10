@@ -27,10 +27,10 @@ class PlatformWeComExportFileAccess implements WeComExportFileAccess {
   Future<String?> choose(String fileName) => Platform.isAndroid
       ? _channel.invokeMethod<String>('choose', {'fileName': fileName})
       : FilePicker.platform.saveFile(
-          dialogTitle: '保存受限数据库副本',
+          dialogTitle: fileName.endsWith('.json') ? '保存项目场景包' : '保存受限数据库副本',
           fileName: fileName,
           type: FileType.custom,
-          allowedExtensions: ['zip'],
+          allowedExtensions: [p.extension(fileName).substring(1)],
         );
 
   @override
@@ -103,21 +103,10 @@ class WeComRestrictedExportService {
       );
       if (destination == null) return null;
       await _requireCurrent();
-      if (!destination.startsWith('content://')) {
-        final path = p.normalize(p.absolute(destination));
-        final basePath = p.normalize(p.absolute(_base.directory.path));
-        if (p.isWithin(basePath, path) ||
-            p.equals(basePath, path) ||
-            p.equals(path, p.normalize(p.absolute(_overlay.path)))) {
-          throw const WeComExportException(
-            WeComExportIssueCode.overlappingPaths,
-            'Export destination overlaps private application data',
-          );
-        }
-        if (p.extension(path).toLowerCase() != '.zip') {
-          throw const FormatException('Choose a ZIP destination');
-        }
-      }
+      validateWeComExportDestination(destination,
+          baseDirectory: _base.directory,
+          overlayPath: _overlay.path,
+          extension: '.zip');
       await _fileAccess.write(archive, destination);
       published = true;
       return copy.appliedRevisionCount;
@@ -152,6 +141,26 @@ class WeComRestrictedExportService {
     if (!_canExport()) {
       throw StateError('The management session ended during export.');
     }
+  }
+}
+
+void validateWeComExportDestination(
+  String destination, {
+  required Directory baseDirectory,
+  required String overlayPath,
+  required String extension,
+}) {
+  if (destination.startsWith('content://')) return;
+  final path = p.normalize(p.absolute(destination));
+  final basePath = p.normalize(p.absolute(baseDirectory.path));
+  if (p.isWithin(basePath, path) ||
+      p.equals(basePath, path) ||
+      p.equals(path, p.normalize(p.absolute(overlayPath)))) {
+    throw const WeComExportException(WeComExportIssueCode.overlappingPaths,
+        'Export destination overlaps private application data');
+  }
+  if (p.extension(path).toLowerCase() != extension) {
+    throw FormatException('Choose a $extension destination');
   }
 }
 

@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 
 import '../data/wecom_scene_service.dart';
+import '../data/wecom_scene_package.dart';
+import '../data/wecom_scene_package_transfer.dart';
 
 class AdminScenesPage extends StatefulWidget {
   const AdminScenesPage({
     required this.scenes,
     required this.onEnvironmentReload,
+    this.packages,
     super.key,
   });
 
   final WeComSceneService scenes;
   final Future<void> Function() onEnvironmentReload;
+  final WeComScenePackageTransfer? packages;
 
   @override
   State<AdminScenesPage> createState() => _AdminScenesPageState();
@@ -72,6 +76,23 @@ class _AdminScenesPageState extends State<AdminScenesPage> {
           if (_busy) const LinearProgressIndicator(),
           Expanded(
               child: ListView(children: [
+            if (widget.packages != null) ...[
+              ListTile(
+                key: const Key('export-scene-package'),
+                enabled: !_busy,
+                onTap: _busy ? null : _export,
+                leading: const Icon(Icons.file_download_outlined),
+                title: const Text('导出当前场景包'),
+              ),
+              ListTile(
+                key: const Key('import-scene-package'),
+                enabled: !_busy,
+                onTap: _busy ? null : _import,
+                leading: const Icon(Icons.file_upload_outlined),
+                title: const Text('导入为新场景'),
+              ),
+              const Divider(height: 1),
+            ],
             for (final snapshot in [false, true]) ...[
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
@@ -135,6 +156,45 @@ class _AdminScenesPageState extends State<AdminScenesPage> {
       reloadEnvironment: true,
     );
   }
+
+  Future<void> _export() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导出项目场景包'),
+        content: const Text('包含当前场景的字段修订、消息编辑、模拟和撤销历史。'
+            '不包含基础数据库、媒体、密码或密钥。导入需要相同身份和基础数据集；'
+            '这是项目场景备份，不是 WeCom 数据库副本。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消')),
+          FilledButton(
+              key: const Key('confirm-export-scene-package'),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('继续导出')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _run(() async {
+      final saved = await widget.packages!.export();
+      if (mounted && saved) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('项目场景包已保存')));
+      }
+      return saved;
+    });
+  }
+
+  Future<void> _import() => _run(() async {
+        final scene = await widget.packages!.import();
+        if (mounted && scene != null) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('场景包已导入：${scene.name}')));
+        }
+        return scene;
+      });
 
   Future<void> _snapshot() async {
     final name = await _nameDialog('保存快照');
@@ -216,17 +276,31 @@ class _AdminScenesPageState extends State<AdminScenesPage> {
       } else {
         await _reload();
       }
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(() => _busy = false);
-        _error();
+        _error(error);
       }
     }
   }
 
-  void _error() => ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('操作失败，请确认管理会话、身份和基础数据仍然有效')),
-      );
+  void _error([Object? error]) {
+    final message = switch (error) {
+      WeComScenePackageException(issue: WeComScenePackageIssue.identity) =>
+        '场景包的企业或用户身份不匹配，未导入',
+      WeComScenePackageException(issue: WeComScenePackageIssue.dataset) =>
+        '基础数据集不匹配，请先选择与场景包相同的基础数据库',
+      WeComScenePackageException(
+        issue: WeComScenePackageIssue.unsupportedVersion
+      ) =>
+        '场景包版本不受支持，未导入',
+      WeComScenePackageException() => '场景包损坏、超出限制或包含无效修订，未导入',
+      _ => '操作失败，请确认管理会话、身份和基础数据仍然有效',
+    };
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
 
   String _date(DateTime date) =>
       '${date.year}-${date.month.toString().padLeft(2, '0')}-'

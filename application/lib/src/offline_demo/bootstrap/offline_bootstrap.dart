@@ -27,6 +27,7 @@ import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
 import '../data/wecom_restricted_export_service.dart';
 import '../data/wecom_scene_service.dart';
+import '../data/wecom_scene_package_transfer.dart';
 import '../data/wecom_source_directory_access.dart';
 import '../domain/repositories.dart';
 import '../state/admin_access_controller.dart';
@@ -50,6 +51,7 @@ class OfflineEnvironment {
     this.wecomRuntime,
     this.wecomScenes,
     this.wecomRestrictedExport,
+    this.wecomScenePackages,
   });
 
   final LocalMediaStore mediaStore;
@@ -68,6 +70,7 @@ class OfflineEnvironment {
   final WeComActiveDatasetRuntime? wecomRuntime;
   final WeComSceneService? wecomScenes;
   final WeComRestrictedExportService? wecomRestrictedExport;
+  final WeComScenePackageTransfer? wecomScenePackages;
 
   bool _closed = false;
 
@@ -172,16 +175,25 @@ abstract final class OfflineBootstrap {
       WeComLocalSimulationRepository? simulation;
       WeComSceneService? scenes;
       WeComRestrictedExportService? restrictedExport;
+      WeComScenePackageTransfer? scenePackages;
       try {
         runtime = await resolver.openActive();
         scenes = WeComSceneService(
           overlayDatabase: overlayDatabase,
           datasetResolver: resolver,
           identityScope: runtime.identity.identity.scope,
+          contract: contract,
           datasetId: runtime.datasetId,
           canEdit: () => adminAccess!.isAdmin,
         );
         await scenes.ensureDefaultScene();
+        scenePackages = WeComScenePackageTransfer(
+          scenes: scenes,
+          baseDirectory: runtime.package.directory,
+          overlayPath: overlayDatabase.path,
+          scratchRoot:
+              Directory(p.join(Directory.systemTemp.path, 'offline_exports')),
+        );
         restrictedExport = WeComRestrictedExportService(
           exporter: WeComDatabasePackageExporter(
             contract: contract,
@@ -294,6 +306,7 @@ abstract final class OfflineBootstrap {
         wecomRuntime: runtime,
         wecomScenes: scenes,
         wecomRestrictedExport: restrictedExport,
+        wecomScenePackages: scenePackages,
       );
     } catch (_) {
       try {

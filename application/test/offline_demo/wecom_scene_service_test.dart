@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:application/src/offline_demo/data/wecom_active_dataset_runtime.dart';
@@ -14,6 +15,7 @@ import 'package:application/src/offline_demo/data/wecom_overlay_command_service.
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_schema.dart';
 import 'package:application/src/offline_demo/data/wecom_scene_service.dart';
+import 'package:application/src/offline_demo/data/wecom_scene_package.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -78,6 +80,7 @@ void main() {
           overlayDatabase: overlay.forScene(id),
         ),
         identityScope: _scope,
+        contract: contract,
         datasetId: datasetId ?? base.datasetId,
         canEdit: () => admin,
       );
@@ -319,6 +322,7 @@ void main() {
             databaseFactory: databaseFactoryFfi,
             overlayDatabase: overlay),
         identityScope: const WeComIdentityScope(corporationId: 200, userId: 2),
+        contract: contract,
         datasetId: base.datasetId,
         canEdit: () => true);
     expect(await other.list(), isEmpty);
@@ -414,5 +418,280 @@ void main() {
     expect(sha256.convert(await base.databaseFile('user.db').readAsBytes()),
         originalHash);
     expect(await contactName('default'), 'Default edit');
+  });
+
+  test('scene package roundtrips all logs into independent editable scenes',
+      () async {
+    final scenes = service('default');
+    await scenes.ensureDefaultScene();
+    final hash =
+        sha256.convert(await base.databaseFile('user.db').readAsBytes());
+    final rev = await nameRevision('default', 'Temporary');
+    await nameRevision('default', 'Selected', reverts: rev);
+    final undone = await messages('default').append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:undone',
+        action: 'add',
+        state: WeComMessageOverlayState.text(
+            senderId: '1', text: 'Undo', sentAt: DateTime.utc(2026)));
+    await messages('default').undo(undone);
+    await messages('default').append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:peer',
+        action: 'add',
+        state: WeComMessageOverlayState.text(
+            senderId: '2', text: 'Peer message', sentAt: DateTime.utc(2026)));
+    final cancelled = await simulations('default').enqueueTextExchange(
+        conversationId: 'R:1', senderProfileId: '1', text: 'Cancelled');
+    await simulations('default').cancelTextExchange(cancelled.eventKey);
+    await simulations('default').enqueueTextExchange(
+        conversationId: 'R:1', senderProfileId: '2', text: 'Visible');
+    final call = await simulations('default').scheduleCall(
+        peerProfileId: '2',
+        scheduledAt: DateTime.now().add(const Duration(days: 1)));
+    await simulations('default').cancelCall(call.eventKey);
+    await nameRevision('elsewhere', 'Other scene');
+    await WeComOverlayCommandService(
+            overlayDatabase: overlay,
+            contract: contract,
+            identityScope:
+                const WeComIdentityScope(corporationId: 200, userId: 2))
+        .upsert(
+            datasetId: base.datasetId,
+            databaseName: 'user.db',
+            tableName: 'user_table',
+            rowKey: const {'id': 1},
+            values: const {'name': 'Other identity'});
+
+    final text = await scenes.exportPackage();
+    expect(text, isNot(contains('Other scene')));
+    expect(text, isNot(contains('Other identity')));
+    expect(text, isNot(contains('identity_user_id":2')));
+    final before = await overlay.connection.query(
+        WeComOverlaySchema.operationsTable,
+        where: 'scene_id = ?',
+        whereArgs: ['default']);
+    final imported = await scenes.importPackage(text);
+    final second = await scenes.importPackage(text);
+    expect(imported.id, isNot(second.id));
+    expect(imported.id, isNot('default'));
+    expect(imported.isSnapshot, isFalse);
+    expect(await contactName(imported.id), 'Selected');
+    expect(await messageTexts(imported.id), ['Peer message']);
+    expect((await simulations(imported.id).listExchanges()).single.text,
+        'Visible');
+    expect(await simulations(imported.id).listCalls(), isEmpty);
+    for (final log in WeComScenePackage.logTypes) {
+      final rows = await overlay.connection.query(log.table,
+          where: 'scene_id = ?', whereArgs: [imported.id], orderBy: log.id);
+      final ids = rows.map((row) => row[log.id]).toSet();
+      for (final row in rows.where((row) => row[log.revert] != null)) {
+        expect(ids, contains(row[log.revert]));
+      }
+    }
+    expect(
+        (await overlay.connection.query(
+                WeComOverlaySchema.datasetActivationsTable,
+                orderBy: 'activation_id DESC',
+                limit: 1))
+            .single['scene_id'],
+        'default');
+    expect(
+        await overlay.connection.query(WeComOverlaySchema.operationsTable,
+            where: 'scene_id = ?', whereArgs: ['default']),
+        before);
+    expect(
+        sha256.convert(await base.databaseFile('user.db').readAsBytes()), hash);
+    final edit = await messages(imported.id).append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:peer',
+        action: 'hide',
+        state: const WeComMessageOverlayState.hidden());
+    await messages(imported.id).undo(edit);
+    expect(await messageTexts(imported.id), ['Peer message']);
+    await scenes.switchScene(imported.id);
+    await overlay.close();
+    overlay = await WeComOverlayDatabase.open(
+        factory: databaseFactoryFfi,
+        databasePath: p.join(root.path, 'overlay.db'));
+    expect(overlay.sceneId, imported.id);
+    expect(await messageTexts(imported.id), ['Peer message']);
+  });
+
+  test(
+      'scene package rejects mismatched scope, base, version and unknown fields',
+      () async {
+    final scenes = service('default');
+    await scenes.ensureDefaultScene();
+    final text = await scenes.exportPackage();
+    for (final change in <String, Object?>{
+      'identity_user_id': 2,
+      'identity_corp_id': 200,
+      'dataset_id': 'b' * 64,
+      'version': 2,
+      'overlay_schema': 10,
+      'admin_pin': '0000',
+    }.entries) {
+      final data = jsonDecode(text) as Map<String, dynamic>;
+      data[change.key] = change.value;
+      await expectLater(scenes.importPackage(jsonEncode(data)),
+          throwsA(isA<WeComScenePackageException>()));
+    }
+    await expectLater(scenes.importPackage('{broken'),
+        throwsA(isA<WeComScenePackageException>()));
+    expect(await scenes.list(), hasLength(1));
+    expect(await overlay.connection.query(WeComOverlaySchema.operationsTable),
+        isEmpty);
+  });
+
+  test('scene package validates targets, payloads and undo references',
+      () async {
+    final scenes = service('default');
+    await scenes.ensureDefaultScene();
+    await nameRevision('default', 'Name');
+    await simulations('default').enqueueTextExchange(
+        conversationId: 'R:1', senderProfileId: '1', text: 'Text');
+    await messages('default').append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:1',
+        action: 'add',
+        state: WeComMessageOverlayState.text(
+            senderId: '2', text: 'Text', sentAt: DateTime.utc(2026)));
+    final text = await scenes.exportPackage();
+    for (final mutation in <void Function(Map<String, dynamic>)>[
+      (data) => data['logs']['overlay_operations'][0]['values_json'] =
+          '{"invented_business_field":1}',
+      (data) => data['logs']['overlay_operations'][0]['row_key_json'] =
+          '{"wrong_pk":1}',
+      (data) =>
+          data['logs']['overlay_operations'][0]['reverts_revision_id'] = 999,
+      (data) => data['logs']['overlay_operations'][0]['identity_user_id'] = 2,
+      (data) => data['logs']['overlay_simulation_events'][0]['payload_json'] =
+          '{"version":999}',
+      (data) => data['logs']['overlay_message_edits'][0]['state_json'] =
+          '{"mode":"text","senderId":"2","text":"hi"}',
+      (data) => data['logs']['overlay_message_edits'][0]['reverts_edit_id'] = 1,
+      (data) => data['logs']['overlay_message_edits']
+          .add(data['logs']['overlay_message_edits'][0]),
+    ]) {
+      final data = jsonDecode(text) as Map<String, dynamic>;
+      mutation(data);
+      await expectLater(scenes.importPackage(jsonEncode(data)),
+          throwsA(isA<WeComScenePackageException>()));
+    }
+    expect(await scenes.list(), hasLength(1));
+    expect(await overlay.connection.query(WeComOverlaySchema.operationsTable),
+        hasLength(1));
+  });
+
+  test('scene package rolls back all imported logs if the last insert fails',
+      () async {
+    final scenes = service('default');
+    await scenes.ensureDefaultScene();
+    await nameRevision('default', 'Keep');
+    await simulations('default').enqueueTextExchange(
+        conversationId: 'R:1', senderProfileId: '1', text: 'Keep simulation');
+    await messages('default').append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:keep',
+        action: 'add',
+        state: WeComMessageOverlayState.text(
+            senderId: '2', text: 'Keep message', sentAt: DateTime.utc(2026)));
+    final text = await scenes.exportPackage();
+    await overlay.connection.execute(
+        'CREATE TRIGGER test_block_scene BEFORE INSERT ON '
+        '${WeComOverlaySchema.scenesTable} BEGIN SELECT RAISE(ABORT, \'test failure\'); END');
+    await expectLater(
+        scenes.importPackage(text), throwsA(isA<DatabaseException>()));
+    expect(await scenes.list(), hasLength(1));
+    expect(await overlay.connection.query(WeComOverlaySchema.operationsTable),
+        hasLength(1));
+    expect(await contactName('default'), 'Keep');
+    expect(
+        await overlay.connection
+            .query(WeComOverlaySchema.simulationEventsTable),
+        hasLength(1));
+    expect(await overlay.connection.query(WeComOverlaySchema.messageEditsTable),
+        hasLength(1));
+  });
+
+  test(
+      'scene package imports into a fresh overlay with no original revision IDs',
+      () async {
+    final scenes = service('default');
+    await scenes.ensureDefaultScene();
+    await nameRevision('default', 'Portable');
+    final exchange = await simulations('default').enqueueTextExchange(
+        conversationId: 'R:1', senderProfileId: '1', text: 'Cancelled');
+    await simulations('default').cancelTextExchange(exchange.eventKey);
+    final edit = await messages('default').append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:old',
+        action: 'add',
+        state: WeComMessageOverlayState.text(
+            senderId: '2', text: 'Undone', sentAt: DateTime.utc(2026)));
+    await messages('default').undo(edit);
+    final text = await scenes.exportPackage();
+    await overlay.close();
+    overlay = await WeComOverlayDatabase.open(
+        factory: databaseFactoryFfi,
+        databasePath: p.join(root.path, 'recipient', 'overlay.db'));
+    await WeComActiveDatasetResolver(
+            destinationRoot: imports,
+            packageImporter: importer,
+            databaseFactory: databaseFactoryFfi,
+            overlayDatabase: overlay)
+        .ensureInitialDataset(base.datasetId);
+    final recipient = service('default');
+    await recipient.ensureDefaultScene();
+    final imported = await recipient.importPackage(text);
+    expect(await contactName(imported.id), 'Portable');
+    expect(await messageTexts(imported.id), isEmpty);
+    expect(await simulations(imported.id).listExchanges(), isEmpty);
+    expect(await contactName('default'), 'Base');
+  });
+
+  test('scene package rejects non-LIFO message undo and altered restored state',
+      () async {
+    final scenes = service('default');
+    await scenes.ensureDefaultScene();
+    final first = await messages('default').append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:m',
+        action: 'add',
+        state: WeComMessageOverlayState.text(
+            senderId: '1', text: 'First', sentAt: DateTime.utc(2026)));
+    final second = await messages('default').append(
+        conversationId: 'R:1',
+        targetKey: 'overlay:m',
+        action: 'replace',
+        state: WeComMessageOverlayState.text(
+            senderId: '2', text: 'Second', sentAt: DateTime.utc(2026)));
+    await messages('default').undo(second);
+    final text = await scenes.exportPackage();
+    for (final change in <String, Object?>{
+      'reverts_edit_id': first.editId,
+      'state_json': const WeComMessageOverlayState.hidden().encode(),
+    }.entries) {
+      final data = jsonDecode(text) as Map<String, dynamic>;
+      data['logs']['overlay_message_edits'].last[change.key] = change.value;
+      await expectLater(scenes.importPackage(jsonEncode(data)),
+          throwsA(isA<WeComScenePackageException>()));
+    }
+    expect(await scenes.list(), hasLength(1));
+  });
+
+  test('scene package export and import deny stale or expired services',
+      () async {
+    final scenes = service('default');
+    await scenes.ensureDefaultScene();
+    final text = await scenes.exportPackage();
+    admin = false;
+    await expectLater(scenes.exportPackage(), throwsStateError);
+    await expectLater(scenes.importPackage(text), throwsStateError);
+    admin = true;
+    await scenes.create('Other active scene');
+    await expectLater(scenes.exportPackage(), throwsStateError);
+    await expectLater(scenes.importPackage(text), throwsStateError);
   });
 }
