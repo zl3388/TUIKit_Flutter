@@ -25,6 +25,7 @@ import '../data/wecom_message_overlay_repository.dart';
 import '../data/wecom_offline_conversation_repository.dart';
 import '../data/wecom_overlay_command_service.dart';
 import '../data/wecom_overlay_database.dart';
+import '../data/wecom_overlay_history_service.dart';
 import '../data/wecom_restricted_export_service.dart';
 import '../data/wecom_scene_service.dart';
 import '../data/wecom_scene_package_transfer.dart';
@@ -52,6 +53,7 @@ class OfflineEnvironment {
     this.wecomScenes,
     this.wecomRestrictedExport,
     this.wecomScenePackages,
+    this.wecomHistory,
   });
 
   final LocalMediaStore mediaStore;
@@ -71,6 +73,7 @@ class OfflineEnvironment {
   final WeComSceneService? wecomScenes;
   final WeComRestrictedExportService? wecomRestrictedExport;
   final WeComScenePackageTransfer? wecomScenePackages;
+  final WeComOverlayHistoryService? wecomHistory;
 
   bool _closed = false;
 
@@ -176,8 +179,17 @@ abstract final class OfflineBootstrap {
       WeComSceneService? scenes;
       WeComRestrictedExportService? restrictedExport;
       WeComScenePackageTransfer? scenePackages;
+      WeComOverlayHistoryService? history;
       try {
         runtime = await resolver.openActive();
+        history = WeComOverlayHistoryService(
+          overlay: overlayDatabase,
+          base: runtime.package,
+          factory: resolvedFactory,
+          contract: contract,
+          scope: runtime.identity.identity.scope,
+          canEdit: () => adminAccess!.isAdmin,
+        );
         scenes = WeComSceneService(
           overlayDatabase: overlayDatabase,
           datasetResolver: resolver,
@@ -307,6 +319,7 @@ abstract final class OfflineBootstrap {
         wecomScenes: scenes,
         wecomRestrictedExport: restrictedExport,
         wecomScenePackages: scenePackages,
+        wecomHistory: history,
       );
     } catch (_) {
       try {

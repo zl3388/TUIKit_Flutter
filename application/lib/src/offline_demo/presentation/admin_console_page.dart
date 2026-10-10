@@ -8,10 +8,10 @@ import '../data/wecom_data_source_service.dart';
 import '../data/wecom_database_package.dart';
 import '../data/wecom_database_package_exporter.dart';
 import '../data/wecom_identity_repository.dart';
-import '../data/wecom_overlay_schema.dart';
 import 'admin_conversation_batch_page.dart';
 import 'admin_scheduled_calls_page.dart';
 import 'admin_scenes_page.dart';
+import 'admin_history_page.dart';
 import 'offline_theme.dart';
 
 class AdminConsolePage extends StatefulWidget {
@@ -34,31 +34,64 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
   var _overlayRevisionCount = 0;
   var _loadingState = true;
   var _processing = false;
+  var _countRequest = 0;
+  var _stateRequest = 0;
 
   @override
   void initState() {
     super.initState();
+    widget.environment.store.addListener(_refreshRevisionCount);
     _loadState();
   }
 
+  @override
+  void didUpdateWidget(covariant AdminConsolePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.environment != widget.environment) {
+      oldWidget.environment.store.removeListener(_refreshRevisionCount);
+      widget.environment.store.addListener(_refreshRevisionCount);
+      _loadState();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.environment.store.removeListener(_refreshRevisionCount);
+    _countRequest++;
+    _stateRequest++;
+    super.dispose();
+  }
+
+  Future<void> _refreshRevisionCount() async {
+    final request = ++_countRequest;
+    try {
+      final count = await _readOverlayRevisionCount();
+      if (mounted && request == _countRequest) {
+        setState(() => _overlayRevisionCount = count);
+      }
+    } catch (_) {
+      // The old database may close while the environment is being replaced.
+    }
+  }
+
   Future<void> _loadState() async {
+    final request = ++_stateRequest;
     try {
       final results = await Future.wait<Object?>([
         widget.environment.wecomDataSources.loadSelectedSource(),
         widget.environment.wecomDataSources.hasDefaultRawKey(),
-        _readOverlayRevisionCount(),
       ]);
-      if (!mounted) {
+      if (!mounted || request != _stateRequest) {
         return;
       }
       setState(() {
         _savedSource = results[0] as WeComSavedDataSource?;
         _hasDefaultKey = results[1]! as bool;
-        _overlayRevisionCount = results[2]! as int;
         _loadingState = false;
       });
+      await _refreshRevisionCount();
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || request != _stateRequest) {
         return;
       }
       setState(() => _loadingState = false);
@@ -142,14 +175,30 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
           child: ListTile(
             leading: const Icon(Icons.layers_outlined),
             title: const Text('本地修订'),
-            subtitle: const Text('当前场景的字段修订'),
+            subtitle: const Text('当前数据集与场景的累计字段记录'),
             trailing: Text(
+              key: const Key('overlay-revision-count'),
               '$_overlayRevisionCount',
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
             ),
           ),
+        ),
+        ListTile(
+          key: const Key('open-overlay-history'),
+          enabled: !_processing && environment.wecomHistory != null,
+          onTap: _processing || environment.wecomHistory == null
+              ? null
+              : () => Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => AdminHistoryPage(
+                        history: environment.wecomHistory!,
+                        adminAccess: environment.adminAccess,
+                        onChanged: store.load),
+                  )),
+          leading: const Icon(Icons.history),
+          title: const Text('修订历史'),
+          trailing: const Icon(Icons.chevron_right),
         ),
         const SizedBox(height: 24),
         Text(
@@ -332,31 +381,8 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
     );
   }
 
-  Future<int> _readOverlayRevisionCount() async {
-    final runtime = widget.environment.wecomRuntime;
-    if (runtime == null) {
-      return 0;
-    }
-    final identity = runtime.identity.identity;
-    final rows =
-        await widget.environment.wecomOverlayDatabase.connection.rawQuery(
-      'SELECT COUNT(*) AS operation_count '
-      'FROM ${WeComOverlaySchema.operationsTable} '
-      'WHERE dataset_id = ? AND identity_corp_id = ? '
-      'AND identity_user_id = ? AND scene_id = ?',
-      [
-        runtime.datasetId,
-        identity.corporationId,
-        identity.userId,
-        widget.environment.wecomOverlayDatabase.sceneId
-      ],
-    );
-    final count = rows.single['operation_count'];
-    if (count is! int) {
-      throw const FormatException('Overlay operation count is invalid');
-    }
-    return count;
-  }
+  Future<int> _readOverlayRevisionCount() =>
+      widget.environment.wecomHistory?.fieldRecordCount() ?? Future.value(0);
 
   Future<void> _openConversationBatchManager() async {
     await Navigator.of(context).push(
@@ -371,10 +397,7 @@ class _AdminConsolePageState extends State<AdminConsolePage> {
     if (!mounted) {
       return;
     }
-    final count = await _readOverlayRevisionCount();
-    if (mounted) {
-      setState(() => _overlayRevisionCount = count);
-    }
+    await _refreshRevisionCount();
   }
 
   Future<void> _selectSource() async {

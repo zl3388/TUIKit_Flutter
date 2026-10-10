@@ -10,6 +10,7 @@ import 'package:application/src/offline_demo/data/wecom_database_package_exporte
 import 'package:application/src/offline_demo/data/wecom_identity_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_local_simulation_repository.dart';
 import 'package:application/src/offline_demo/data/wecom_overlay_database.dart';
+import 'package:application/src/offline_demo/data/wecom_overlay_history_service.dart';
 import 'package:application/src/offline_demo/data/wecom_restricted_export_service.dart';
 import 'package:application/src/offline_demo/data/wecom_source_directory_access.dart';
 import 'package:application/src/offline_demo/domain/models.dart';
@@ -26,6 +27,43 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   setUpAll(sqfliteFfiInit);
+
+  testWidgets(
+      'admin revision count refreshes on store changes and ignores stale reads',
+      (tester) async {
+    final history = _CounterHistory();
+    final fixture =
+        (await tester.runAsync(() => _HomeFixture.create(history: history)))!;
+    addTearDown(fixture.close);
+    await tester
+        .runAsync(() => fixture.environment.adminAccess.setupPin('0000'));
+    await tester.pumpWidget(MaterialApp(
+        theme: OfflineTheme.light,
+        home: OfflineHome(
+            environment: fixture.environment,
+            onEnvironmentReload: () async {})));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('管理').last);
+    await tester.pumpAndSettle();
+    final count = find.byKey(const Key('overlay-revision-count'));
+    expect(tester.widget<Text>(count).data, '0');
+    history.value = 2;
+    await fixture.environment.store.refreshContacts();
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(count).data, '2');
+    final stale = Completer<int>();
+    history.next = stale.future;
+    await fixture.environment.store.refreshContacts();
+    history.next = null;
+    history.value = 3;
+    await fixture.environment.store.refreshContacts();
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(count).data, '3');
+    stale.complete(1);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(count).data, '3');
+    expect(tester.takeException(), isNull);
+  });
 
   for (final width in [360.0, 1024.0]) {
     testWidgets(
@@ -365,6 +403,7 @@ class _HomeFixture {
     bool identityAvailable = true,
     DateTime Function()? simulationNow,
     WeComRestrictedExportService? restrictedExport,
+    WeComOverlayHistoryService? history,
   }) async {
     final root = await Directory.systemTemp.createTemp('tui_offline_home_');
     final mediaRoot = Directory(p.join(root.path, 'media'));
@@ -424,6 +463,7 @@ class _HomeFixture {
       wecomSourceDirectories: const _UnavailableSourceDirectoryAccess(),
       wecomSimulation: simulation,
       wecomRestrictedExport: restrictedExport,
+      wecomHistory: history,
     );
     return _HomeFixture(
       environment: environment,
@@ -437,6 +477,15 @@ class _HomeFixture {
     await environment.close();
     await root.delete(recursive: true);
   }
+}
+
+class _CounterHistory implements WeComOverlayHistoryService {
+  int value = 0;
+  Future<int>? next;
+  @override
+  Future<int> fieldRecordCount() => next ?? Future.value(value);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _ControlledExport implements WeComRestrictedExportService {
